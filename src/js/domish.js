@@ -149,17 +149,18 @@ export class Node {
           ? `${this.namespace}:${this.nodeName}`
           : `${this.nodeName}`;
         res.push(`<${name}`);
-        for (let k in res.attributes) {
-          const v = res.attributes[k];
+        // TODO: Fix attribute serialisation
+        for (let k in this.attributes) {
+          const v = this.attributes[k];
           if (v !== undefined) {
-            res.push(v === null ? ` ${k}` : `${k}="${v}"`);
+            res.push(v === null ? ` ${k}` : ` ${k}="${v}"`);
           }
         }
-        for (let ns in res.attributesNS) {
-          for (let k in res.attributesNS[ns]) {
-            const v = res.attributesNS[ns][k];
+        for (let ns in this.attributesNS) {
+          for (let k in this.attributesNS[ns]) {
+            const v = this.attributesNS[ns][k];
             if (v !== undefined) {
-              res.push(v === null ? ` ${k}` : `${k}="${v}"`);
+              res.push(v === null ? ` ${k}` : ` ${k}="${v}"`);
             }
           }
         }
@@ -222,8 +223,10 @@ export class Element extends Node {
   constructor(name, namespace) {
     super(name, Node.ELEMENT_NODE);
     this.namespace = namespace;
+    this.style = {};
     this.attributes = {};
     this.attributesNS = {};
+    this.classList = new TokenList(this, "class");
     this.sheet = name === "style" ? new StyleSheet() : null;
   }
 
@@ -232,6 +235,7 @@ export class Element extends Node {
   }
 
   setAttribute(name, value) {
+    // FIXME: Handling of style attribute
     this.attributes[name] = value;
   }
 
@@ -322,12 +326,45 @@ export class Document extends Node {
   }
 }
 
+// --
+// ## Token List
+//
+// This is used to work with `classList`, for instance.
+//
+export class TokenList {
+  constructor(element, attribute = "class") {
+    this.element = element;
+    this.attribute = attribute;
+  }
+
+  add(value) {
+    if (!this.contains(value)) {
+      const v = this._get();
+      this._set(v ? `${v} ${value}` : v);
+    }
+  }
+  contains(value) {
+    return this._get().split(" ").indexOf(value) >= 0;
+  }
+  remove(value) {
+    this._set(this._get().split(" ").filter((_) => _ == value).join(" "));
+  }
+  toggle(value) {
+    return contains(value) ? remove(value) && false : add(value) || true;
+  }
+  _get() {
+    return this.element.getAttribute(this.attribute) || "";
+  }
+  _set(value) {
+    this.element.setAttribute(this.attribute, value);
+  }
+}
 export class StyleSheet {
   constructor() {
     this.cssRules = [];
   }
   deleteRule(index) {
-    this.cssRules.splic(index, 1);
+    this.cssRules.splice(index, 1);
     return this;
   }
   insertRule(rule, index = 0) {
