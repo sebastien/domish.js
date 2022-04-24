@@ -340,7 +340,7 @@ export class TokenList {
   add(value) {
     if (!this.contains(value)) {
       const v = this._get();
-      this._set(v ? `${v} ${value}` : v);
+      this._set(v ? `${v} ${value}` : value);
     }
   }
   contains(value) {
