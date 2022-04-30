@@ -123,16 +123,17 @@ export class Node {
   // --
   // ### Less common methods
 
-  contains() {}
-  getRootNode() {}
-  hasChildNodes() {}
-  isDefaultNamespace() {}
-  isEqualNode() {}
-  isSameNode() {}
-  lookupPrefix() {}
-  lookupNamespaceURI() {}
-  normalize() {}
-  compareDocumentPosition() {}
+  //   NOTE: Left as note implemented yet
+  //   contains() {}
+  //   getRootNode() {}
+  //   hasChildNodes() {}
+  //   isDefaultNamespace() {}
+  //   isEqualNode() {}
+  //   isSameNode() {}
+  //   lookupPrefix() {}
+  //   lookupNamespaceURI() {}
+  //   normalize() {}
+  //   compareDocumentPosition() {}
 
   // --
   // ### Serialization
