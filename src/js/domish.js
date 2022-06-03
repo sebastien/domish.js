@@ -9,6 +9,58 @@
 // shortcomings, it should be relatively simple to implement the missing
 // bits of functionality.
 
+//
+// ### Query Support
+const RE_QUERY = /([.#]?)([\w\d_\-]+)/g;
+class Query {
+  constructor(query) {
+    // TODO: We should support space to do level -2 matches
+    // TODO: We should fail if the selector is not supported
+    this.text = query;
+    this.selectors = [...query.matchAll(RE_QUERY)].map((_) => ({
+      type: _[1],
+      value: _[2],
+    }));
+  }
+  match(node) {
+    for (let i = 0; i < this.selectors.length; i++) {
+      const { type, value } = this.selectors[i];
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        return false;
+      }
+      switch (type) {
+        case "":
+          if (
+            node.nodeName !== value &&
+            node.nodeName.toLowerCase() !== value.toLowerCase()
+          ) {
+            return false;
+          }
+          break;
+        case ".":
+          if (
+            !(node.classList.contains(value))
+          ) {
+            return false;
+          }
+          break;
+        case "#":
+          if (
+            !(
+              node.getAttribute("id") !== value
+            )
+          ) {
+            return false;
+          }
+          break;
+        default:
+          throw new Error(`Unsupport type: ${type} in ${selector}`);
+          break;
+      }
+    }
+    return true;
+  }
+}
 // --
 // ## The Node class
 //
@@ -33,6 +85,21 @@ export class Node {
     this.childNodes = [];
     this.parentNode = null;
     this.data = "";
+  }
+
+  iterWalk(callback) {
+    if (callback(this) !== false) {
+      this.childNodes.forEach((_) => _.iterWalk(callback));
+    }
+  }
+
+  querySelectorAll(query) {
+    const res = [];
+    const q = new Query(query);
+    this.iterWalk((node) => {
+      if (q.match(node)) res.push(node);
+    });
+    return res;
   }
 
   // --
@@ -76,7 +143,7 @@ export class Node {
     return this;
   }
   cloneNode(deep = false) {
-    const n = _create();
+    const n = this._create();
     n.nodeName = this.nodeName;
     n.nodeType = this.nodeType;
     n.data = this.data;
@@ -238,6 +305,10 @@ export class Element extends Node {
   setAttribute(name, value) {
     // FIXME: Handling of style attribute
     this.attributes[name] = value;
+  }
+
+  gasAttribute(name) {
+    return this.attributes[name];
   }
 
   hasAttribute(name) {
