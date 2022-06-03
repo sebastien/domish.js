@@ -240,6 +240,10 @@ export class Element extends Node {
     this.attributes[name] = value;
   }
 
+  hasAttribute(name) {
+    return this.attributes[name] !== undefined;
+  }
+
   setAttributeNS(ns, name, value) {
     const attr = this.attributes[ns] = this.attributes[ns] || {};
     attr[name] = value;
