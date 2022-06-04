@@ -310,6 +310,15 @@ export class Element extends Node {
     return this.getAttribute("id");
   }
 
+  removeAttribute(name) {
+    if (name === "style") {
+      this.style = {};
+      this.attributes["style"] = undefined;
+    } else {
+      delete this.attributes[name];
+    }
+  }
+
   setAttribute(name, value) {
     // FIXME: Handling of style attribute
     this.attributes[name] = `${value}`;
