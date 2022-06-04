@@ -219,7 +219,15 @@ export class Node {
         res.push(`<${name}`);
         // TODO: Fix attribute serialisation
         for (let k in this.attributes) {
-          const v = this.attributes[k];
+          let v = this.attributes[k];
+          // We need to merge the style as well
+          if (k === "style") {
+            v = (v ? [v] : []).concat(
+              Object.entries(this.style).map(([k, v]) =>
+                `${toCSSPropertyName(k)}: ${v}`
+              ),
+            ).join(";");
+          }
           if (v !== undefined) {
             res.push(v === null ? ` ${k}` : ` ${k}="${v}"`);
           }
@@ -292,7 +300,7 @@ export class Element extends Node {
     super(name, Node.ELEMENT_NODE);
     this.namespace = namespace;
     this.style = {};
-    this.attributes = {};
+    this.attributes = { style: undefined };
     this.attributesNS = {};
     this.classList = new TokenList(this, "class");
     this.sheet = name === "style" ? new StyleSheet() : null;
@@ -304,7 +312,7 @@ export class Element extends Node {
 
   setAttribute(name, value) {
     // FIXME: Handling of style attribute
-    this.attributes[name] = value;
+    this.attributes[name] = `${value}`;
   }
 
   gasAttribute(name) {
@@ -327,11 +335,10 @@ export class Element extends Node {
     return (this.attributes[ns] || {})[name];
   }
 
-  clone(deep) {
-    const res = super.clone(deep);
-    for (let k in this.attributes) {
-      res.attributes[k] = this.attributes[k];
-    }
+  cloneNode(deep) {
+    const res = super.cloneNode(deep);
+    Object.assign(res.attributes, this.attributes);
+    Object.assign(res.style, this.style);
     for (let ns in this.attributesNS) {
       const attr = res.attributesNS[ns] = {};
       for (let k in this.attributes) {
@@ -448,6 +455,17 @@ export class StyleSheet {
     return this;
   }
 }
+
+const toCSSPropertyName = (name) => {
+  const property = /[A-Za-z][a-z]*/g;
+  const res = [];
+  let match = null;
+  while ((match = property.exec(name)) !== null) {
+    res.push(match[0].toLowerCase());
+  }
+  return res.join("-");
+};
+
 // --
 // ## References
 //
