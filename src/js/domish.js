@@ -144,7 +144,7 @@ export class Node {
   }
 
   after(...nodes) {
-    const parent = this.parent;
+    const parent = this.parentNode;
     const next = this.nextSibling;
     for (let i = 0; i < nodes.length; i++) {
       const node = nodes[i];
@@ -158,7 +158,7 @@ export class Node {
   }
 
   before(...nodes) {
-    const parent = this.parent;
+    const parent = this.parentNode;
     for (let i = 0; i < nodes.length; i++) {
       const node = nodes[i];
       parent.insertBefore(node, next);
