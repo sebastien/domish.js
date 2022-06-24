@@ -146,21 +146,23 @@ export class Node {
   after(...nodes) {
     const parent = this.parent;
     const next = this.nextSibling;
-    nodes.each((node) => {
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
       if (next) {
         parent.insertBefore(node, next);
       } else {
         parent.appendChild(node);
       }
-    });
+    }
     return this;
   }
 
   before(...nodes) {
     const parent = this.parent;
-    nodes.each((node) => {
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
       parent.insertBefore(node, next);
-    });
+    }
     return this;
   }
 
