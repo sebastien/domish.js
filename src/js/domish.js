@@ -229,12 +229,17 @@ export class Node {
   // --
   // ### Serialization
 
-  toXMLLines() {
+  toXMLLines(options) {
     let res = [];
+    const has_comments = options && options.comments === false ? false : true;
+    const has_doctype = options && options.docytpe === false ? false : true;
     switch (this.nodeType) {
       case Node.DOCUMENT_NODE:
-        res.push("<?xml version='1.0' charset='utf-8' ?>\n");
-        res = this.childNodes.reduce((r, v) => r.concat(v.toXMLLines()), res);
+        has_doctype && res.push("<?xml version='1.0' charset='utf-8' ?>\n");
+        res = this.childNodes.reduce(
+          (r, v) => r.concat(v.toXMLLines(options)),
+          res,
+        );
         break;
       case Node.ELEMENT_NODE:
         const name = this.namespace
@@ -269,7 +274,10 @@ export class Node {
           res.push(" />");
         } else {
           res.push(">");
-          res = this.childNodes.reduce((r, v) => r.concat(v.toXMLLines()), res);
+          res = this.childNodes.reduce(
+            (r, v) => r.concat(v.toXMLLines(options)),
+            res,
+          );
           res.push(`</${name}>`);
         }
         break;
@@ -283,13 +291,14 @@ export class Node {
         );
         break;
       case Node.COMMENT_NODE:
-        res.push(`<!-- ${this.data.replaceAll(">", "&gt;")} -->`);
+        has_comments &&
+          res.push(`<!-- ${this.data.replaceAll(">", "&gt;")} -->`);
         break;
     }
     return res;
   }
-  toXML() {
-    return this.toXMLLines().join("");
+  toXML(options = {}) {
+    return this.toXMLLines(options).join("");
   }
   // --
   // ### Helpers
