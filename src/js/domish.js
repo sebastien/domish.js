@@ -142,6 +142,28 @@ export class Node {
     node.parentNode = this;
     return this;
   }
+
+  after(...nodes) {
+    const parent = this.parent;
+    const next = this.nextSibling;
+    nodes.each((node) => {
+      if (next) {
+        parent.insertBefore(node, next);
+      } else {
+        parent.appendChild(node);
+      }
+    });
+    return this;
+  }
+
+  before(...nodes) {
+    const parent = this.parent;
+    nodes.each((node) => {
+      parent.insertBefore(node, next);
+    });
+    return this;
+  }
+
   cloneNode(deep = false) {
     const n = this._create();
     n.nodeName = this.nodeName;
@@ -227,6 +249,7 @@ export class Node {
                 `${toCSSPropertyName(k)}: ${v}`
               ),
             ).join(";");
+            v = v && v.length > 0 ? v : undefined;
           }
           if (v !== undefined) {
             res.push(v === null ? ` ${k}` : ` ${k}="${v}"`);
@@ -257,7 +280,7 @@ export class Node {
             .replaceAll("<", "&lt;"),
         );
         break;
-      case Node.TEXT_NODE:
+      case Node.COMMENT_NODE:
         res.push(`<!-- ${this.data.replaceAll(">", "&gt;")} -->`);
         break;
     }
@@ -403,9 +426,14 @@ export class Document extends Node {
     return new TextNode(value);
   }
 
+  createComment(value) {
+    return new Comment(value);
+  }
+
   createElement(name) {
     return this._register(new Element(name));
   }
+
   createElementNS(namespace, name) {
     return this._register(new Element(name, namespace));
   }
