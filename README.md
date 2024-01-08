@@ -12,3 +12,75 @@ implementation.
 *DOMish* has plenty of limitations, and is really designed to meet the
 very minimum requirements for managing a virtual DOM, so it doesn't
 support features like selectors, or events, for instance.
+
+There is also a simple HTML/XML parser implementation called *xmlish*,
+which can be used to parse strings.
+
+
+## Support APIs
+
+- Document
+  - createComment()
+  - createElement()
+  - createElementNS()
+  - createTextNode()
+  - getElementById()
+- Element
+  - attributes
+  - cloneNode()
+  - gasAttribute()
+  - getAttribute()
+  - getAttributeNS()
+  - hasAttribute()
+  - id
+  - removeAttribute()
+  - setAttribute()
+  - setAttributeNS()
+  - style
+- Node
+  - ATTRIBUTE_NODE
+  - CDATA_SECTION_NODE
+  - COMMENT_NODE
+  - DOCUMENT_FRAGMENT_NODE
+  - DOCUMENT_NODE
+  - DOCUMENT_TYPE_NODE
+  - ELEMENT_NODE
+  - Namespaces
+  - PROCESSING_INSTRUCTION_NODE
+  - TEXT_NODE
+  - after()
+  - appendChild()
+  - before()
+  - childNodes
+  - cloneNode()
+  - firstChild
+  - insertBefore()
+  - isConnected
+  - iterWalk()
+  - lastChild
+  - nextSibling
+  - nodeValue
+  - ownerDocument
+  - parentElement
+  - previousSibling
+  - querySelectorAll()
+  - removeChild()
+  - replaceChild()
+  - textContent
+  - toXML()
+  - toXMLLines()
+- Query
+  - match()
+  - selectors
+  - type
+  - value
+- StyleSheet
+  - cssRules
+  - deleteRule()
+  - insertRule()
+- TokenList
+  - add()
+  - contains()
+  - remove()
+  - toggle()
+

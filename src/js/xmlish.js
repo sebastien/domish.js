@@ -1,6 +1,8 @@
 // This is a Bard-assisted port of my Python's XMLish module. It's a simple HTML/XML
 // parser that can be used in both SAX/DOM style.
 
+import { Document } from "./domish.js";
+
 class Fragment {
 	/** Represents a text fragment. */
 
@@ -109,9 +111,6 @@ const RE_TAG = new RegExp(
 );
 
 export const parseAttributes = (text, attributes = {}) => {
-	// Ensure attributes are treated as a dictionary
-	attributes = Object.assign({}, attributes);
-
 	const eqIndex = text.indexOf("=");
 
 	if (eqIndex === -1) {
@@ -213,6 +212,55 @@ const Operator = {
 	setNodeEnd: () => {},
 };
 
+// --
+// HTML Parser courtesy of Bard
+
+export class DOMOperator {
+	constructor() {
+		this.document = new Document();
+	}
+	appendChild(node, child) {
+		node.appendChild(child);
+		return node;
+	}
+	setNodeEnd() {}
+	createNode(marker) {
+		switch (marker.type) {
+			case "Content":
+				return this.document.createTextNode(marker.text);
+			case "Start":
+			case "Inline":
+				switch (marker.name) {
+					case "!CDATA":
+						return this.document.createTextNode(marker.text);
+					case "--":
+						return this.document.createComment(marker.text);
+					case "!DOCTYPE":
+						break;
+					default: {
+						const node = this.document.createElement(marker.name);
+						console.log("ATTRS", marker.attributes);
+						for (const attr in marker.attributes) {
+							node.setAttribute(attr, marker.attributes[attr]);
+						}
+						return node;
+					}
+				}
+				return null;
+			default:
+				return null;
+		}
+	}
+
+	createComment(data) {
+		return this.document.createComment(data);
+	}
+
+	createTextNode(data) {
+		return this.document.createTextNode(data);
+	}
+}
+
 // Define the Builder class, using a generic type placeholder for flexibility
 class Builder {
 	constructor(operator = Operator) {
@@ -257,7 +305,6 @@ class Builder {
 	}
 }
 
-export const parseHTML = (text) => {
-	const builder = new Builder();
-	return builder.run(iterMarkers(text));
-};
+export const parseHTML = (text, operator = new DOMOperator()) =>
+	new Builder(operator).run(iterMarkers(text));
+// EOF

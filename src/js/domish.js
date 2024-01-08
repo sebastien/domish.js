@@ -520,48 +520,6 @@ const toCSSPropertyName = (name) => {
 };
 
 // --
-// HTML Parser courtesy of Bard
-
-export class DOMFactory {
-	constructor() {
-		this.document = new Document();
-	}
-
-	createElement(name, attributes, children) {
-		const node = this.document.createElement(name);
-		if (attributes) {
-			for (const attr in attributes) {
-				node.setAttribute(attr, attributes[attr]);
-			}
-		}
-		if (children) {
-			for (const child of children) {
-				node.appendChild(child);
-			}
-		}
-		return node;
-	}
-
-	createComment(data) {
-		return this.document.createComment(data);
-	}
-
-	createTextNode(data) {
-		return this.document.createTextNode(data);
-	}
-}
-
-class DOMParser {
-	constructor(factory = new DOMFactory()) {
-		this.factory = factory;
-	}
-}
-
-export function parseHTML(text, parser = new DOMParser()) {
-	return parser.parse(text);
-}
-
-// --
 // ## References
 //
 // - DOM API Reference at [DevDocs](https://devdocs.io/dom/node).
@@ -575,5 +533,16 @@ export function parseHTML(text, parser = new DOMParser()) {
 export const NodeList = Array;
 export const StyleSheetList = Array;
 export const document = new Document();
+
+const DOM = {
+	Node,
+	Element,
+	Document,
+	NodeList,
+	StyleSheetList,
+	document,
+};
+
+export default DOM;
 
 // EOF
