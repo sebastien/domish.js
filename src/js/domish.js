@@ -11,7 +11,7 @@
 
 //
 // ### Query Support
-const RE_QUERY = /([.#]?)([\w\d_\-]+)/g;
+const RE_QUERY = /([.#]?)([\w\d_-]+)/g;
 class Query {
 	constructor(query) {
 		// TODO: We should support space to do level -2 matches
@@ -48,8 +48,9 @@ class Query {
 					}
 					break;
 				default:
-					throw new Error(`Unsupport type: ${type} in ${selector}`);
-					break;
+					throw new Error(
+						`Unsupport type: ${type} in ${this.selectors[i]}`
+					);
 			}
 		}
 		return true;
@@ -96,12 +97,21 @@ export class Node {
 		return res;
 	}
 
+	matches(query) {
+		return new Query(query).match(this);
+	}
+
 	// --
 	// ### Common accessors
-	//
+
+	get children() {
+		return this.childNodes.filter((_) => _.nodeType === Node.ELEMENT_NODE);
+	}
+
 	get firstChild() {
 		return this.childNodes[0];
 	}
+
 	get lastChild() {
 		const n = this.childNodes.length;
 		return n > 0 ? this.childNodes[n - 1] : null;
@@ -155,7 +165,7 @@ export class Node {
 		const parent = this.parentNode;
 		for (let i = 0; i < nodes.length; i++) {
 			const node = nodes[i];
-			parent.insertBefore(node, next);
+			parent.insertBefore(node, this);
 		}
 		return this;
 	}
@@ -171,7 +181,7 @@ export class Node {
 					const r = _.cloneNode(deep);
 					r.parentNode = n;
 					return r;
-				})
+			  })
 			: [];
 		return n;
 	}
@@ -208,10 +218,20 @@ export class Node {
 	// --
 	// ### Less common methods
 
-	//   NOTE: Left as note implemented yet
+	getRootNode() {
+		let node = this;
+		while (node.parentNode) {
+			node = node.parentNode;
+		}
+		return node;
+	}
+
+	hasChildNodes() {
+		return this.childNodes.length;
+	}
+
+	//   NOTE: Left as not implemented yet
 	//   contains() {}
-	//   getRootNode() {}
-	//   hasChildNodes() {}
 	//   isDefaultNamespace() {}
 	//   isEqualNode() {}
 	//   isSameNode() {}
@@ -234,49 +254,52 @@ export class Node {
 					res.push("<?xml version='1.0' charset='utf-8' ?>\n");
 				res = this.childNodes.reduce(
 					(r, v) => r.concat(v.toXMLLines(options)),
-					res,
+					res
 				);
 				break;
 			case Node.ELEMENT_NODE:
-				const name = this.namespace
-					? `${this.namespace}:${this.nodeName}`
-					: `${this.nodeName}`;
-				res.push(`<${name}`);
-				// TODO: Fix attribute serialisation
-				for (let k in this.attributes) {
-					let v = this.attributes[k];
-					// We need to merge the style as well
-					if (k === "style") {
-						v = (v ? [v] : [])
-							.concat(
-								Object.entries(this.style).map(
-									([k, v]) => `${toCSSPropertyName(k)}: ${v}`,
-								),
-							)
-							.join(";");
-						v = v && v.length > 0 ? v : undefined;
-					}
-					if (v !== undefined) {
-						res.push(v === null ? ` ${k}` : ` ${k}="${v}"`);
-					}
-				}
-				for (let ns in this.attributesNS) {
-					for (let k in this.attributesNS[ns]) {
-						const v = this.attributesNS[ns][k];
+				{
+					const name = this.namespace
+						? `${this.namespace}:${this.nodeName}`
+						: `${this.nodeName}`;
+					res.push(`<${name}`);
+					// TODO: Fix attribute serialisation
+					for (let k in this.attributes) {
+						let v = this.attributes.get(k);
+						// We need to merge the style as well
+						if (k === "style") {
+							v = (v ? [v] : [])
+								.concat(
+									Object.entries(this.style).map(
+										([k, v]) =>
+											`${toCSSPropertyName(k)}: ${v}`
+									)
+								)
+								.join(";");
+							v = v && v.length > 0 ? v : undefined;
+						}
 						if (v !== undefined) {
 							res.push(v === null ? ` ${k}` : ` ${k}="${v}"`);
 						}
 					}
-				}
-				if (this.childNodes.length == 0) {
-					res.push(" />");
-				} else {
-					res.push(">");
-					res = this.childNodes.reduce(
-						(r, v) => r.concat(v.toXMLLines(options)),
-						res,
-					);
-					res.push(`</${name}>`);
+					for (let ns in this.attributesNS) {
+						for (let k in this.attributesNS.get(ns)) {
+							const v = this.attributesNS.get(ns).get(k);
+							if (v !== undefined) {
+								res.push(v === null ? ` ${k}` : ` ${k}="${v}"`);
+							}
+						}
+					}
+					if (this.childNodes.length == 0) {
+						res.push(" />");
+					} else {
+						res.push(">");
+						res = this.childNodes.reduce(
+							(r, v) => r.concat(v.toXMLLines(options)),
+							res
+						);
+						res.push(`</${name}>`);
+					}
 				}
 				break;
 			case Node.TEXT_NODE:
@@ -285,7 +308,7 @@ export class Node {
 					this.data
 						.replaceAll("&", "&amp;")
 						.replaceAll(">", "&gt;")
-						.replaceAll("<", "&lt;"),
+						.replaceAll("<", "&lt;")
 				);
 				break;
 			case Node.COMMENT_NODE:
@@ -329,64 +352,81 @@ export class Node {
 	}
 }
 
+class DataSetProxy {
+	static get(target, property) {
+		// TODO: We may need to do de-camel-case
+		return target.attributes.get(`data-${property}`);
+	}
+}
+
 export class Element extends Node {
 	constructor(name, namespace) {
 		super(name, Node.ELEMENT_NODE);
 		this.namespace = namespace;
 		this.style = {};
-		this.attributes = { style: undefined };
-		this.attributesNS = {};
+		this.attributes = new Map();
+		this.attributes.set("style", undefined);
+		this.attributesNS = new Map();
 		this.classList = new TokenList(this, "class");
 		this.sheet = name === "style" ? new StyleSheet() : null;
+		this.dataset = new Proxy(this, DataSetProxy);
 	}
 
 	get id() {
 		return this.getAttribute("id");
 	}
 
+	// FIXME: This is not entirely faithful, but helps with the "template"
+	// element
+	get content() {
+		return this;
+	}
+
 	removeAttribute(name) {
 		if (name === "style") {
 			this.style = {};
-			this.attributes["style"] = undefined;
+			this.attributes.set("style", undefined);
 		} else {
-			delete this.attributes[name];
+			this.attributes.remove(name);
 		}
 	}
 
 	setAttribute(name, value) {
 		// FIXME: Handling of style attribute
-		this.attributes[name] = `${value}`;
+		this.attributes.set(name, `${value}`);
 	}
 
 	gasAttribute(name) {
-		return this.attributes[name];
+		return this.attributes.get(name);
 	}
 
 	hasAttribute(name) {
-		return this.attributes[name] !== undefined;
+		return this.attributes.has(name);
 	}
 
 	setAttributeNS(ns, name, value) {
-		const attr = (this.attributes[ns] = this.attributes[ns] || {});
-		attr[name] = value;
+		const attr = (this.attributesNS[ns] =
+			this.attributesNS[ns] || new Map());
+		attr.set(name, value);
 	}
 
 	getAttribute(name) {
-		return this.attributes[name];
+		return this.attributes.get(name);
 	}
+
 	getAttributeNS(ns, name) {
-		return (this.attributes[ns] || {})[name];
+		return this.attributesNS.has(ns)
+			? this.attributesNS.get(ns).get(name)
+			: undefined;
 	}
 
 	cloneNode(deep) {
 		const res = super.cloneNode(deep);
-		Object.assign(res.attributes, this.attributes);
-		Object.assign(res.style, this.style);
-		for (let ns in this.attributesNS) {
-			const attr = (res.attributesNS[ns] = {});
-			for (let k in this.attributes) {
-				attr[k] = this.attributesNS[ns][k];
-			}
+		for (const [k, v] of this.attributes.entries()) {
+			res.attributes.set(k, v);
+		}
+		for (const [k, v] of this.attributesNS.entries()) {
+			res.attributesNS.set(k, new Map(v));
 		}
 		return res;
 	}
@@ -395,7 +435,6 @@ export class Element extends Node {
 		return new Element(this.name, this.namespace);
 	}
 }
-
 export class TextNode extends Node {
 	constructor(data) {
 		super("#text", Node.TEXT_NODE);
@@ -433,6 +472,9 @@ export class Document extends Node {
 		return null;
 	}
 
+	createTreeWalker(node, nodeFilter) {
+		return new TreeWalker(node, nodeFilter);
+	}
 	createTextNode(value) {
 		return new TextNode(value);
 	}
@@ -457,6 +499,81 @@ export class Document extends Node {
 	}
 }
 
+export class NodeFilter {
+	static SHOW_ALL = 4294967295;
+	static SHOW_ATTRIBUTE = 2;
+	static SHOW_CDATA_SECTION = 8;
+	static SHOW_COMMENT = 128;
+	static SHOW_DOCUMENT = 256;
+	static SHOW_DOCUMENT_FRAGMENT = 1024;
+	static SHOW_DOCUMENT_TYPE = 512;
+	static SHOW_ELEMENT = 1;
+	static SHOW_ENTITY_REFERENCE = 16;
+	static SHOW_ENTITY = 32;
+	static SHOW_PROCESSING = 64;
+	static SHOW_NOTATION = 2048;
+	static SHOW_TEXT = 4;
+}
+
+export class TreeWalker {
+	constructor(root, nodeFilter, predicate) {
+		this.root = root;
+		this.currentNode = root;
+		this.nodeFilter = nodeFilter;
+		this.predicate = predicate;
+		// TODO: Support attributes
+	}
+	_nextNode(node) {
+		if (!node) {
+			return null;
+		} else if (node.childNodes) {
+			return node.childNodes[0];
+		} else if (node.nextSibling) {
+			return node.nextSibling;
+		} else {
+			let node = this.currentNode.parentNode;
+			while (node.parentNode) {
+				node = node.parentNode;
+				if (node.nextSibling) {
+					return node.nextSibling;
+				}
+			}
+			return null;
+		}
+	}
+	_acceptNode(node) {
+		switch (node.nodeType) {
+			case Node.ELEMENT_NODE:
+				return this.nodeFilter & NodeFilter.SHOW_ELEMENT;
+			case Node.ATTRIBUTE_NODE:
+				return this.nodeFilter & NodeFilter.SHOW_ATTRIBUTE;
+			case Node.CDATA_SECTION_NODE:
+				return this.nodeFilter & NodeFilter.SHOW_CDATA_SECTION;
+			case Node.PROCESSING_INSTRUCTION_NODE:
+				return this.nodeFilter & NodeFilter.SHOW_PROCESSING;
+			case Node.DOCUMENT_NODE:
+				return this.nodeFilter & NodeFilter.SHOW_DOCUMENT;
+			case Node.DOCUMENT_TYPE_NODE:
+				return this.nodeFilter & NodeFilter.SHOW_DOCUMENT_TYPE;
+			case Node.DOCUMENT_FRAGMENT_NODE:
+				return this.nodeFilter & NodeFilter.SHOW_DOCUMENT_FRAGMENT;
+			case Node.TEXT_NODE:
+				return this.nodeFilter & NodeFilter.SHOW_TEXT;
+			case Node.COMMENT_NODE:
+				return this.nodeFilter & NodeFilter.SHOW_COMMENT;
+			default:
+				return false;
+		}
+	}
+	nextNode() {
+		let next = this._nextNode(this.currentNode);
+		while (next && !this._acceptNode(next)) {
+			next = this._nextNode(next);
+		}
+		this.currentNode = next;
+		return next;
+	}
+}
 // --
 // ## Token List
 //
@@ -482,11 +599,13 @@ export class TokenList {
 			this._get()
 				.split(" ")
 				.filter((_) => _ == value)
-				.join(" "),
+				.join(" ")
 		);
 	}
 	toggle(value) {
-		return contains(value) ? remove(value) && false : add(value) || true;
+		return this.contains(value)
+			? this.remove(value) && false
+			: this.add(value) || true;
 	}
 	_get() {
 		return this.element.getAttribute(this.attribute) || "";
@@ -495,6 +614,7 @@ export class TokenList {
 		this.element.setAttribute(this.attribute, value);
 	}
 }
+
 export class StyleSheet {
 	constructor() {
 		this.cssRules = [];
@@ -539,6 +659,7 @@ const DOM = {
 	Element,
 	Document,
 	NodeList,
+	NodeFilter,
 	StyleSheetList,
 	document,
 };

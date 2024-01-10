@@ -16,7 +16,7 @@ class Fragment {
 				if (offset !== match.index) {
 					yield new MatchFragment(
 						null,
-						new Fragment(text, offset, match.index),
+						new Fragment(text, offset, match.index)
 					);
 				}
 
@@ -26,8 +26,8 @@ class Fragment {
 					new Fragment(
 						text,
 						match.index,
-						match.index + match[0].length,
-					),
+						match.index + match[0].length
+					)
 				);
 
 				offset = Math.max(offset + 1, match.index + match[0].length);
@@ -107,7 +107,7 @@ const RE_TAG = new RegExp(
 		"(?<CDATA><\\!\\[CDATA\\[(?<cdata>([\r\n]|.)*?)\\]\\]\\>)|",
 		"\\<(?<closing>/)?(?<qualname>(((?<ns>\\w+[\\d\\w_-]*):)?(?<name>[\\d\\w_\\-]+)))(?<attrs>\\s+[^\\>]*)?\\s*\\>",
 	].join(""),
-	"mg",
+	"mg"
 );
 
 export const parseAttributes = (text, attributes = {}) => {
@@ -138,8 +138,8 @@ export const parseAttributes = (text, attributes = {}) => {
 			sep === "'"
 				? text.indexOf("'", eqIndex + 2)
 				: sep === '"'
-					? text.indexOf('"', eqIndex + 2)
-					: text.indexOf(" ", eqIndex);
+				? text.indexOf('"', eqIndex + 2)
+				: text.indexOf(" ", eqIndex);
 
 		const name = text.substring(0, eqIndex).trim();
 		const value =
@@ -176,7 +176,7 @@ function* iterMarkers(text) {
 			yield new Marker(
 				MarkerType.Start,
 				fragment.slice(0, 10),
-				"!DOCTYPE",
+				"!DOCTYPE"
 			);
 			yield new Marker(MarkerType.Content, fragment.slice(10, -2));
 			yield new Marker(MarkerType.End, fragment.slice(-2), "!DOCTYPE");
@@ -196,8 +196,8 @@ function* iterMarkers(text) {
 			const t = match.groups.closing
 				? MarkerType.End
 				: is_inline
-					? MarkerType.Inline
-					: MarkerType.Start;
+				? MarkerType.Inline
+				: MarkerType.Start;
 			yield new Marker(t, fragment, name, attr);
 		}
 	}
@@ -239,7 +239,6 @@ export class DOMOperator {
 						break;
 					default: {
 						const node = this.document.createElement(marker.name);
-						console.log("ATTRS", marker.attributes);
 						for (const attr in marker.attributes) {
 							node.setAttribute(attr, marker.attributes[attr]);
 						}
