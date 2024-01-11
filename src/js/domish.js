@@ -11,42 +11,66 @@
 
 //
 // ### Query Support
-const RE_QUERY = /([.#]?)([\w\d_-]+)/g;
+const RE_QUERY =
+	/((?<type>[.#]?)(?<name>[\w\d_-]+))|(\[(?<attributes>[^\]]+)\])/g;
+const RE_QUERY_ATTR =
+	/^(?<name>\w+)((?<operator>[~|^$*]?=)("(?<value_0>[^"]+)"|'(?<value_1>[^']+)'|(?<value_2>[^\]]+)))?$/;
+
 class Query {
 	constructor(query) {
 		// TODO: We should support space to do level -2 matches
 		// TODO: We should fail if the selector is not supported
 		this.text = query;
-		this.selectors = [...query.matchAll(RE_QUERY)].map((_) => ({
-			type: _[1],
-			value: _[2],
-		}));
+		this.selectors = [...query.matchAll(RE_QUERY)].map((_) => {
+			const attrs = _.groups.attributes
+				? _.groups.attributes.match(RE_QUERY_ATTR)?.groups
+				: null;
+			return {
+				type: _.groups.attributes ? "@" : _.groups.type,
+				name: _.groups.name,
+				attributes: attrs
+					? {
+							...attrs,
+							value:
+								attrs.value_0 || attrs.value_1 || attrs.value_2,
+					  }
+					: null,
+			};
+		});
 	}
 	match(node) {
 		for (let i = 0; i < this.selectors.length; i++) {
-			const { type, value } = this.selectors[i];
+			const { type, name, attributes } = this.selectors[i];
 			if (node.nodeType !== Node.ELEMENT_NODE) {
 				return false;
 			}
 			switch (type) {
 				case "":
 					if (
-						node.nodeName !== value &&
-						node.nodeName.toLowerCase() !== value.toLowerCase()
+						node.nodeName !== name &&
+						node.nodeName.toLowerCase() !== name.toLowerCase()
 					) {
 						return false;
 					}
 					break;
 				case ".":
-					if (!node.classList.contains(value)) {
+					if (!node.classList.contains(name)) {
 						return false;
 					}
 					break;
 				case "#":
-					if (!(node.getAttribute("id") !== value)) {
+					if (!(node.getAttribute("id") !== name)) {
 						return false;
 					}
 					break;
+				case "@":
+					if (attributes) {
+						if (!node.hasAttribute(attributes.name)) {
+							return false;
+						}
+						// TODO: Support operator
+					}
+					return true;
 				default:
 					throw new Error(
 						`Unsupport type: ${type} in ${this.selectors[i]}`
@@ -142,6 +166,10 @@ export class Node {
 	// --
 	// ### Common methods
 	appendChild(node) {
+		if (node.parentNode) {
+			node.parentNode.removeChild(node);
+			node.parentNode = null;
+		}
 		this.childNodes.push(node);
 		node.parentNode = this;
 		return this;
@@ -264,8 +292,7 @@ export class Node {
 						: `${this.nodeName}`;
 					res.push(`<${name}`);
 					// TODO: Fix attribute serialisation
-					for (let k in this.attributes) {
-						let v = this.attributes.get(k);
+					for (let [k, v] of this._attributes.entries()) {
 						// We need to merge the style as well
 						if (k === "style") {
 							v = (v ? [v] : [])
@@ -282,10 +309,10 @@ export class Node {
 							res.push(v === null ? ` ${k}` : ` ${k}="${v}"`);
 						}
 					}
-					for (let ns in this.attributesNS) {
-						for (let k in this.attributesNS.get(ns)) {
-							const v = this.attributesNS.get(ns).get(k);
+					for (let [ns, attrs] of this._attributesNS.entries()) {
+						for (let [k, v] of attrs.entries()) {
 							if (v !== undefined) {
+								k = ns ? `${ns}:{k}` : k;
 								res.push(v === null ? ` ${k}` : ` ${k}="${v}"`);
 							}
 						}
@@ -321,6 +348,7 @@ export class Node {
 	toXML(options = {}) {
 		return this.toXMLLines(options).join("");
 	}
+
 	// --
 	// ### Helpers
 
@@ -346,16 +374,39 @@ export class Node {
 	}
 
 	_getSiblingAt(index, offset = 0) {
-		return this.parentNode
-			? this.parentNode.childNodes[index + offset]
-			: null;
+		return this.parentNode?.childNodes[index + offset] || null;
 	}
 }
 
 class DataSetProxy {
 	static get(target, property) {
 		// TODO: We may need to do de-camel-case
-		return target.attributes.get(`data-${property}`);
+		return typeof property === "string"
+			? target._attributes.get(`data-${property}`)
+			: target[property];
+	}
+}
+
+export class AttributeNode extends Node {
+	constructor(name, namespace, ownerElement) {
+		super(name, Node.ATTRIBUTE_NODE);
+		this.name = name;
+		this.namespace = namespace;
+		this.ownerElement = ownerElement;
+	}
+
+	get value() {
+		return (
+			(this.namespace
+				? this.ownerElement.getAttributeNS(this.namespace, this.name)
+				: this.ownerElement.getAttribute(this.name)) || ""
+		);
+	}
+
+	set value(value) {
+		this.namespace
+			? this.ownerElement.setAttributeNS(this.namespace, this.name, value)
+			: this.ownerElement.setAttribute(this.name, value);
 	}
 }
 
@@ -364,9 +415,9 @@ export class Element extends Node {
 		super(name, Node.ELEMENT_NODE);
 		this.namespace = namespace;
 		this.style = {};
-		this.attributes = new Map();
-		this.attributes.set("style", undefined);
-		this.attributesNS = new Map();
+		this._attributes = new Map();
+		this._attributes.set("style", undefined);
+		this._attributesNS = new Map();
 		this.classList = new TokenList(this, "class");
 		this.sheet = name === "style" ? new StyleSheet() : null;
 		this.dataset = new Proxy(this, DataSetProxy);
@@ -376,57 +427,71 @@ export class Element extends Node {
 		return this.getAttribute("id");
 	}
 
-	// FIXME: This is not entirely faithful, but helps with the "template"
-	// element
-	get content() {
-		return this;
+	// FIXME: This is quite inefficient
+	get attributes() {
+		return [...this._attributes.keys()]
+			.map((k) => new AttributeNode(k, null, this))
+			.concat(
+				[...this._attributesNS.entries()].reduce((r, [ns, k]) => {
+					r.push(new AttributeNode(k, ns, this));
+					return r;
+				}, [])
+			);
 	}
 
+	// FIXME: This is not entirely faithful, but helps with the "template"
+	// element
 	removeAttribute(name) {
 		if (name === "style") {
 			this.style = {};
-			this.attributes.set("style", undefined);
+			this._attributes.set("style", undefined);
 		} else {
-			this.attributes.remove(name);
+			this._attributes.delete(name);
+		}
+	}
+
+	removeAttributeNS(namespace, name) {
+		if (this._attribtuesNS.has(namespace)) {
+			this._attributesNS.get(namespace).delete(name);
 		}
 	}
 
 	setAttribute(name, value) {
 		// FIXME: Handling of style attribute
-		this.attributes.set(name, `${value}`);
-	}
-
-	gasAttribute(name) {
-		return this.attributes.get(name);
-	}
-
-	hasAttribute(name) {
-		return this.attributes.has(name);
+		this._attributes.set(name, `${value}`);
 	}
 
 	setAttributeNS(ns, name, value) {
-		const attr = (this.attributesNS[ns] =
-			this.attributesNS[ns] || new Map());
-		attr.set(name, value);
+		if (!this._attributesNS.has(ns)) {
+			this._attributesNS.set(ns, new Map());
+		}
+		this._attributesNS.get(ns).set(name, value);
+	}
+
+	hasAttribute(name) {
+		return this._attributes.has(name);
+	}
+	hasAttributeNS(namespace, name) {
+		return this._attributesNS.get(namespace)?.has(name);
 	}
 
 	getAttribute(name) {
-		return this.attributes.get(name);
+		return this._attributes.get(name);
 	}
 
 	getAttributeNS(ns, name) {
-		return this.attributesNS.has(ns)
-			? this.attributesNS.get(ns).get(name)
+		return this._attributesNS.has(ns)
+			? this._attributesNS.get(ns).get(name)
 			: undefined;
 	}
 
 	cloneNode(deep) {
 		const res = super.cloneNode(deep);
-		for (const [k, v] of this.attributes.entries()) {
-			res.attributes.set(k, v);
+		for (const [k, v] of this._attributes.entries()) {
+			res._attributes.set(k, v);
 		}
-		for (const [k, v] of this.attributesNS.entries()) {
-			res.attributesNS.set(k, new Map(v));
+		for (const [k, v] of this._attributesNS.entries()) {
+			res._attributesNS.set(k, new Map(v));
 		}
 		return res;
 	}
@@ -435,11 +500,23 @@ export class Element extends Node {
 		return new Element(this.name, this.namespace);
 	}
 }
+
+export class TemplateElement extends Element {
+	constructor(name, namespace) {
+		super(name, namespace);
+		this.content = new DocumentFragment();
+	}
+	appendChild(node) {
+		this.content.appendChild(node);
+		return this;
+	}
+}
 export class TextNode extends Node {
 	constructor(data) {
 		super("#text", Node.TEXT_NODE);
 		this.data = data;
 	}
+
 	_create() {
 		return new TextNode(this.data);
 	}
@@ -452,6 +529,11 @@ export class Comment extends Node {
 	}
 	_create() {
 		return new Comment(this.data);
+	}
+}
+export class DocumentFragment extends Node {
+	constructor() {
+		super("document-fragment", Node.DOCUMENT_FRAGMENT_NODE);
 	}
 }
 
@@ -483,8 +565,21 @@ export class Document extends Node {
 		return new Comment(value);
 	}
 
+	createDocumentFragment() {
+		return new DocumentFragment();
+	}
+
 	createElement(name) {
-		return this._register(new Element(name));
+		let element = null;
+		switch (name) {
+			case "template":
+			case "TEMPLATE":
+				element = new TemplateElement(name);
+				break;
+			default:
+				element = new Element(name);
+		}
+		return this._register(element);
 	}
 
 	createElementNS(namespace, name) {
