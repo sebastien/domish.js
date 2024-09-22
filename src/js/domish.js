@@ -73,7 +73,7 @@ class Query {
 					return true;
 				default:
 					throw new Error(
-						`Unsupport type: ${type} in ${this.selectors[i]}`
+						`Unsupported type: ${type} in ${this.selectors[i]}`
 					);
 			}
 		}
@@ -113,12 +113,23 @@ export class Node {
 	}
 
 	querySelectorAll(query) {
-		const res = [];
-		const q = new Query(query);
-		this.iterWalk((node) => {
-			if (q.match(node)) res.push(node);
-		});
-		return res;
+		let scope = [this];
+		for (const qs of query.split(/\s+/)) {
+			if (qs) {
+				const q = new Query(query);
+				const matched = [];
+				for (const n of scope) {
+					n.iterWalk((_) => {
+						if (q.match(_)) matched.push(_);
+					});
+				}
+				scope = matched;
+			}
+			if (scope.length == 0) {
+				return scope;
+			}
+		}
+		return query ? scope : [];
 	}
 
 	matches(query) {
