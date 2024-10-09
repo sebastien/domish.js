@@ -282,6 +282,7 @@ export class Node {
 	// --
 	// ### Serialization
 
+	// TODO: iterXMLLines
 	toXMLLines(options) {
 		let res = [];
 		const has_comments =

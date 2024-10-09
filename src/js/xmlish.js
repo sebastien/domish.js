@@ -304,6 +304,19 @@ class Builder {
 	}
 }
 
+export class DOMParser {
+	constructor() {
+		this.builder = new Builder(new DOMOperator());
+	}
+	parseFromString(text, type) {
+		const doc = new Document();
+		for (const node of this.builder.run(iterMarkets(text))) {
+			doc.body.appendChild(node);
+		}
+		return doc;
+	}
+}
+
 export const parseHTML = (text, operator = new DOMOperator()) =>
 	new Builder(operator).run(iterMarkers(text));
 // EOF
