@@ -288,6 +288,7 @@ export class Node {
 		const has_comments =
 			options && options.comments === false ? false : true;
 		const has_doctype = options && options.docytpe === false ? false : true;
+
 		switch (this.nodeType) {
 			case Node.DOCUMENT_NODE:
 				has_doctype &&
@@ -359,6 +360,13 @@ export class Node {
 	}
 	toXML(options = {}) {
 		return this.toXMLLines(options).join("");
+	}
+
+	toJSON() {
+		return {
+			name: this.nodeName,
+			children: this.childNodes.map((_) => _.toJSON()),
+		};
 	}
 
 	// --
@@ -511,6 +519,15 @@ export class Element extends Node {
 	_create() {
 		return new Element(this.name, this.namespace);
 	}
+	toJSON() {
+		const res = super.toJSON();
+		const attr = {};
+		for (const [k, v] of this._attributes.entries()) {
+			attr[k] = v;
+		}
+		res.attributes = attr;
+		return res;
+	}
 }
 
 export class TemplateElement extends Element {
@@ -532,6 +549,9 @@ export class TextNode extends Node {
 	_create() {
 		return new TextNode(this.data);
 	}
+	toJSON() {
+		return this.data;
+	}
 }
 
 export class Comment extends Node {
@@ -541,6 +561,9 @@ export class Comment extends Node {
 	}
 	_create() {
 		return new Comment(this.data);
+	}
+	toJSON() {
+		return undefined;
 	}
 }
 export class DocumentFragment extends Node {
