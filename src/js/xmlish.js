@@ -277,14 +277,18 @@ class Builder {
 
 		for (const marker of stream) {
 			if (marker.type === MarkerType.End) {
-				const i = stack.findIndex((m) => m.marker.name === marker.name);
+				// We look for the closing tag
+				let i = stack.length - 1;
+				while (i >= 0 && stack[i].marker.name !== marker.name) {
+					i--;
+				}
 				if (i !== -1) {
 					this.operator.setNodeEnd(stack[i].node, marker);
 					stack.length = i;
 					current = stack.length
 						? stack[stack.length - 1].node
 						: null;
-				} // Handle unmatching close tags as needed
+				} // FIXME: We haven't found a matching tag
 			} else {
 				const node = this.operator.createNode(marker);
 				if (current) {
