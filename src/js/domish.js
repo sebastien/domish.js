@@ -112,6 +112,14 @@ export class Node {
 		}
 	}
 
+	get outerHTML() {
+		return this.toXMLLines().join("");
+	}
+
+	get innerHTML() {
+		return this.childNodes.flatMap((_) => _.toXMLLines()).join("");
+	}
+
 	querySelectorAll(query) {
 		let scope = [this];
 		for (const qs of query.split(/\s+/)) {
@@ -177,12 +185,18 @@ export class Node {
 	// --
 	// ### Common methods
 	appendChild(node) {
-		if (node.parentNode) {
-			node.parentNode.removeChild(node);
-			node.parentNode = null;
+		if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+			for (const n of node.childNodes) {
+				this.appendChild(n);
+			}
+		} else {
+			if (node.parentNode) {
+				node.parentNode.removeChild(node);
+				node.parentNode = null;
+			}
+			this.childNodes.push(node);
+			node.parentNode = this;
 		}
-		this.childNodes.push(node);
-		node.parentNode = this;
 		return this;
 	}
 
@@ -353,7 +367,11 @@ export class Node {
 				break;
 			case Node.COMMENT_NODE:
 				has_comments &&
-					res.push(`<!-- ${this.data.replaceAll(">", "&gt;")} -->`);
+					res.push(
+						`<!-- ${
+							this.data ? this.data.replaceAll(">", "&gt;") : ""
+						} -->`
+					);
 				break;
 		}
 		return res;
@@ -793,6 +811,10 @@ const DOM = {
 	StyleSheetList,
 	document,
 };
+
+export function install(target = globalThis) {
+	return Object.assign(target, DOM);
+}
 
 export default DOM;
 
