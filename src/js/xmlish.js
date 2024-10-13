@@ -314,7 +314,7 @@ export class DOMParser {
 	}
 	parseFromString(text, type) {
 		const doc = new Document();
-		for (const node of this.builder.run(iterMarkets(text))) {
+		for (const node of this.builder.run(iterMarkers(text))) {
 			doc.body.appendChild(node);
 		}
 		return doc;
@@ -323,4 +323,6 @@ export class DOMParser {
 
 export const parseHTML = (text, operator = new DOMOperator()) =>
 	new Builder(operator).run(iterMarkers(text));
+
+export default { DOMParser };
 // EOF
