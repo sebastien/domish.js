@@ -110,10 +110,14 @@ const RE_TAG = new RegExp(
 	"mg"
 );
 
-export const parseAttributes = (text, attributes = {}) => {
-	const eqIndex = text.indexOf("=");
+const RE_ATTR_SEP=/[=\s]/
 
-	if (eqIndex === -1) {
+export const parseAttributes = (text, attributes = {}) => {
+	// FIXME: We should not do trim or substring, we should
+	// just parse the string as is.
+	const m = text.match(RE_ATTR_SEP)
+
+	if (!m) {
 		const spaceIndex = text.indexOf(" ");
 
 		if (spaceIndex === -1) {
@@ -128,24 +132,25 @@ export const parseAttributes = (text, attributes = {}) => {
 			}
 			parseAttributes(text.substring(spaceIndex + 1), attributes);
 		}
-	} else {
-		if (eqIndex + 1 === text.length) {
+	} else if (m[0] === "=")  {
+		const name = text.substring(0, m.index).trim();
+		if (m.index + m[0].length >= text.length) {
+			attributes[name] = "";
 			return attributes;
 		}
 
-		const sep = text[eqIndex + 1];
+		const chr = text[m.index + 1];
 		const end =
-			sep === "'"
-				? text.indexOf("'", eqIndex + 2)
-				: sep === '"'
-				? text.indexOf('"', eqIndex + 2)
-				: text.indexOf(" ", eqIndex);
+			chr === "'"
+				? text.indexOf("'", m.index + 2)
+				: chr === '"'
+				? text.indexOf('"', m.index + 2)
+				: text.indexOf(" ", m.index);
 
-		const name = text.substring(0, eqIndex).trim();
 		const value =
 			end === -1
-				? text.substring(eqIndex + 1).trim()
-				: text.substring(eqIndex + 1, end + 1);
+				? text.substring(m.index + 1).trim()
+				: text.substring(m.index + 1, end + 1);
 
 		if ((value && value[0] === "'") || value[0] === '"') {
 			attributes[name] = value.substring(1, value.length - 1);
@@ -154,6 +159,9 @@ export const parseAttributes = (text, attributes = {}) => {
 		}
 
 		parseAttributes(text.substring(end + 1).trim(), attributes);
+	} else {
+		attributes[text.substring(0,m.index).trim()] = null;
+		parseAttributes(text.substring(m.index + m[0].length).trim(), attributes);
 	}
 
 	return attributes;
