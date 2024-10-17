@@ -9,6 +9,26 @@
 // shortcomings, it should be relatively simple to implement the missing
 // bits of functionality.
 
+const tags =  (...tags) => tags.reduce((r,v) => (r.set(v,true),r.set(v.toLowerCase(),true),r.set(v.toUpperCase(),true),r), new Map())
+
+const  HTML_EMPTY = tags(
+        "area",
+        "base",
+        "basefont",
+        "br",
+        "col",
+        "frame",
+        "hr",
+        "img",
+        "input",
+        "isindex",
+        "link",
+        "meta",
+        "param",
+    )
+
+const HTML_NOEMPTY = tags("slot")
+
 //
 // ### Query Support
 const RE_QUERY =
@@ -113,11 +133,11 @@ export class Node {
 	}
 
 	get outerHTML() {
-		return this.toXMLLines().join("");
+		return this.toXMLLines({html:true}).join("");
 	}
 
 	get innerHTML() {
-		return this.childNodes.flatMap((_) => _.toXMLLines()).join("");
+		return this.childNodes.flatMap((_) => _.toXMLLines({html:true})).join("");
 	}
 
 	querySelectorAll(query) {
@@ -298,26 +318,34 @@ export class Node {
 
 	// TODO: iterXMLLines
 	toXMLLines(options) {
-		let res = [];
+		return [...this.iterXMLLines(options)]
+	
+	}
+
+	*iterXMLLines(options) {
 		const has_comments =
 			options && options.comments === false ? false : true;
 		const has_doctype = options && options.docytpe === false ? false : true;
 
 		switch (this.nodeType) {
 			case Node.DOCUMENT_NODE:
-				has_doctype &&
-					res.push("<?xml version='1.0' charset='utf-8' ?>\n");
-				res = this.childNodes.reduce(
-					(r, v) => r.concat(v.toXMLLines(options)),
-					res
-				);
+			case Node.DOCUMENT_FRAGMENT_NODE:
+				if (has_doctype) {
+					yield ("<?xml version='1.0' charset='utf-8' ?>\n");
+				}
+				for (const n of this.childNodes) {
+					for (const l of n.iterXMLLines(options)) {
+						yield l;
+					}
+				}
 				break;
 			case Node.ELEMENT_NODE:
 				{
 					const name = this.namespace
 						? `${this.namespace}:${this.nodeName}`
 						: `${this.nodeName}`;
-					res.push(`<${name}`);
+					const empty = !options.html ? undefined : HTML_NOEMPTY.has(name) ? false : HTML_EMPTY.has(name) ? true : undefined;
+					yield `<${name}`;
 					// TODO: Fix attribute serialisation
 					for (let [k, v] of this._attributes.entries()) {
 						// We need to merge the style as well
@@ -333,52 +361,60 @@ export class Node {
 							v = v && v.length > 0 ? v : undefined;
 						}
 						if (v !== undefined) {
-							res.push(v === null ? ` ${k}` : ` ${k}="${v}"`);
+							yield v === null ? ` ${k}` : ` ${k}="${v}"`;
 						}
 					}
-					for (let [ns, attrs] of this._attributesNS.entries()) {
+					for (const [ns, attrs] of this._attributesNS.entries()) {
 						for (let [k, v] of attrs.entries()) {
 							if (v !== undefined) {
 								k = ns ? `${ns}:{k}` : k;
-								res.push(v === null ? ` ${k}` : ` ${k}="${v}"`);
+								yield (v === null ? ` ${k}` : ` ${k}="${v}"`);
 							}
 						}
 					}
-					if (this.childNodes.length == 0) {
-						res.push(" />");
+					if (options.html && empty === true) {
+						yield " >";
+					} else if (this.childNodes.length == 0 && empty !== false) {
+						yield " />";
 					} else {
-						res.push(">");
-						res = this.childNodes.reduce(
-							(r, v) => r.concat(v.toXMLLines(options)),
-							res
-						);
-						res.push(`</${name}>`);
+						yield ">";
+						for (const n of this.childNodes) {
+							for (const l of n.iterXMLLines(options)) {
+								yield l;
+							}
+						}
+						yield `</${name}>`;
 					}
 				}
 				break;
 			case Node.TEXT_NODE:
 				// FIXME: This is not the right way to do it
-				res.push(
-					this.data
+				yield this.data
 						.replaceAll("&", "&amp;")
 						.replaceAll(">", "&gt;")
-						.replaceAll("<", "&lt;")
-				);
+						.replaceAll("<", "&lt;");
 				break;
 			case Node.COMMENT_NODE:
-				has_comments &&
-					res.push(
-						`<!-- ${
+				if(has_comments) {
+					yield (
+						`<!--${
 							this.data ? this.data.replaceAll(">", "&gt;") : ""
-						} -->`
-					);
+						}-->`
+					)
+				}
 				break;
 		}
-		return res;
 	}
+
 	toXML(options = {}) {
 		return this.toXMLLines(options).join("");
 	}
+
+	toHTML(options = {}) {
+		return this.toXMLLines({...options, html:true}).join("");
+	}
+
+
 
 	toJSON() {
 		return {
