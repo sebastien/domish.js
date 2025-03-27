@@ -110,7 +110,7 @@ const RE_TAG = new RegExp(
 	"mg"
 );
 
-const RE_ATTR_SEP=/[=\s]/
+const RE_ATTR_SEP = /[=\s]/
 
 export const parseAttributes = (text, attributes = {}) => {
 	// FIXME: We should not do trim or substring, we should
@@ -132,7 +132,7 @@ export const parseAttributes = (text, attributes = {}) => {
 			}
 			parseAttributes(text.substring(spaceIndex + 1), attributes);
 		}
-	} else if (m[0] === "=")  {
+	} else if (m[0] === "=") {
 		const name = text.substring(0, m.index).trim();
 		if (m.index + m[0].length >= text.length) {
 			attributes[name] = "";
@@ -144,8 +144,8 @@ export const parseAttributes = (text, attributes = {}) => {
 			chr === "'"
 				? text.indexOf("'", m.index + 2)
 				: chr === '"'
-				? text.indexOf('"', m.index + 2)
-				: text.indexOf(" ", m.index);
+					? text.indexOf('"', m.index + 2)
+					: text.indexOf(" ", m.index);
 
 		const value =
 			end === -1
@@ -160,7 +160,7 @@ export const parseAttributes = (text, attributes = {}) => {
 
 		parseAttributes(text.substring(end + 1).trim(), attributes);
 	} else {
-		attributes[text.substring(0,m.index).trim()] = null;
+		attributes[text.substring(0, m.index).trim()] = null;
 		parseAttributes(text.substring(m.index + m[0].length).trim(), attributes);
 	}
 
@@ -204,8 +204,8 @@ function* iterMarkers(text) {
 			const t = match.groups.closing
 				? MarkerType.End
 				: is_inline
-				? MarkerType.Inline
-				: MarkerType.Start;
+					? MarkerType.Inline
+					: MarkerType.Start;
 			yield new Marker(t, fragment, name, attr);
 		}
 	}
@@ -217,7 +217,7 @@ const Operator = {
 		node.children.push(child);
 		return node;
 	},
-	setNodeEnd: () => {},
+	setNodeEnd: () => { },
 };
 
 // --
@@ -231,7 +231,7 @@ export class DOMOperator {
 		node.appendChild(child);
 		return node;
 	}
-	setNodeEnd() {}
+	setNodeEnd() { }
 	createNode(marker) {
 		switch (marker.type) {
 			case "Content":
@@ -329,8 +329,10 @@ export class DOMParser {
 	}
 }
 
-export const parseHTML = (text, operator = new DOMOperator()) =>
-	new Builder(operator).run(iterMarkers(text));
+function parseHTML(text, operator = new DOMOperator()) {
+	return new Builder(operator).run(iterMarkers(text));
+}
 
 export default { DOMParser };
+export { parseHTML }
 // EOF
