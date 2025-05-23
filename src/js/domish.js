@@ -9,25 +9,34 @@
 // shortcomings, it should be relatively simple to implement the missing
 // bits of functionality.
 
-const tags =  (...tags) => tags.reduce((r,v) => (r.set(v,true),r.set(v.toLowerCase(),true),r.set(v.toUpperCase(),true),r), new Map())
+const tags = (...tags) =>
+	tags.reduce(
+		(r, v) => (
+			r.set(v, true),
+			r.set(v.toLowerCase(), true),
+			r.set(v.toUpperCase(), true),
+			r
+		),
+		new Map()
+	);
 
-const  HTML_EMPTY = tags(
-        "area",
-        "base",
-        "basefont",
-        "br",
-        "col",
-        "frame",
-        "hr",
-        "img",
-        "input",
-        "isindex",
-        "link",
-        "meta",
-        "param",
-    )
+const HTML_EMPTY = tags(
+	"area",
+	"base",
+	"basefont",
+	"br",
+	"col",
+	"frame",
+	"hr",
+	"img",
+	"input",
+	"isindex",
+	"link",
+	"meta",
+	"param"
+);
 
-const HTML_NOEMPTY = tags("slot")
+const HTML_NOEMPTY = tags("slot");
 
 //
 // ### Query Support
@@ -133,11 +142,13 @@ export class Node {
 	}
 
 	get outerHTML() {
-		return this.toXMLLines({html:true}).join("");
+		return this.toXMLLines({ html: true }).join("");
 	}
 
 	get innerHTML() {
-		return this.childNodes.flatMap((_) => _.toXMLLines({html:true})).join("");
+		return this.childNodes
+			.flatMap((_) => _.toXMLLines({ html: true }))
+			.join("");
 	}
 
 	querySelectorAll(query) {
@@ -318,8 +329,7 @@ export class Node {
 
 	// TODO: iterXMLLines
 	toXMLLines(options) {
-		return [...this.iterXMLLines(options)]
-	
+		return [...this.iterXMLLines(options)];
 	}
 
 	*iterXMLLines(options) {
@@ -331,7 +341,7 @@ export class Node {
 			case Node.DOCUMENT_NODE:
 			case Node.DOCUMENT_FRAGMENT_NODE:
 				if (has_doctype) {
-					yield ("<?xml version='1.0' charset='utf-8' ?>\n");
+					yield "<?xml version='1.0' charset='utf-8' ?>\n";
 				}
 				for (const n of this.childNodes) {
 					for (const l of n.iterXMLLines(options)) {
@@ -344,7 +354,13 @@ export class Node {
 					const name = this.namespace
 						? `${this.namespace}:${this.nodeName}`
 						: `${this.nodeName}`;
-					const empty = !options.html ? undefined : HTML_NOEMPTY.has(name) ? false : HTML_EMPTY.has(name) ? true : undefined;
+					const empty = !options.html
+						? undefined
+						: HTML_NOEMPTY.has(name)
+						? false
+						: HTML_EMPTY.has(name)
+						? true
+						: undefined;
 					yield `<${name}`;
 					// TODO: Fix attribute serialisation
 					for (let [k, v] of this._attributes.entries()) {
@@ -368,7 +384,7 @@ export class Node {
 						for (let [k, v] of attrs.entries()) {
 							if (v !== undefined) {
 								k = ns ? `${ns}:{k}` : k;
-								yield (v === null ? ` ${k}` : ` ${k}="${v}"`);
+								yield v === null ? ` ${k}` : ` ${k}="${v}"`;
 							}
 						}
 					}
@@ -390,17 +406,15 @@ export class Node {
 			case Node.TEXT_NODE:
 				// FIXME: This is not the right way to do it
 				yield this.data
-						.replaceAll("&", "&amp;")
-						.replaceAll(">", "&gt;")
-						.replaceAll("<", "&lt;");
+					.replaceAll("&", "&amp;")
+					.replaceAll(">", "&gt;")
+					.replaceAll("<", "&lt;");
 				break;
 			case Node.COMMENT_NODE:
-				if(has_comments) {
-					yield (
-						`<!--${
-							this.data ? this.data.replaceAll(">", "&gt;") : ""
-						}-->`
-					)
+				if (has_comments) {
+					yield `<!--${
+						this.data ? this.data.replaceAll(">", "&gt;") : ""
+					}-->`;
 				}
 				break;
 		}
@@ -411,10 +425,8 @@ export class Node {
 	}
 
 	toHTML(options = {}) {
-		return this.toXMLLines({...options, html:true}).join("");
+		return this.toXMLLines({ ...options, html: true }).join("");
 	}
-
-
 
 	toJSON() {
 		return {

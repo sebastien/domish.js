@@ -100,6 +100,48 @@ const MarkerType = Object.freeze({
 	Inline: "Inline",
 });
 
+const RE_ENTITY = /&(?:#(?<code>\d+)|(?<name>[a-z]+));/gi;
+const ENTITIES = {
+	amp: "&",
+	lt: "<",
+	gt: ">",
+	quot: '"',
+	apos: "'",
+};
+
+function* iexpandEntities(text) {
+	if (!text || text.length < 3) {
+		return text;
+	}
+	let match = null;
+	let o = 0;
+	while ((match = RE_ENTITY.exec(text)) !== null) {
+		const start = match.index;
+		const end = start + match[0].length;
+		const { code, name } = match.groups;
+		if (start > o) {
+			yield text.substring(o, start);
+		}
+		if (name) {
+			yield ENTITIES[name.toLowerCase()] || match[0];
+		} else {
+			const c = Number(code);
+			// Invalid code point → leave entity as-is
+			yield !Number.isFinite(c) || c < 0x0 || c > 0x10ffff
+				? match[0]
+				: String.fromCodePoint(c);
+		}
+		o = end;
+	}
+	if (o + 1 < text.length) {
+		yield text.substring(o);
+	}
+}
+
+function expandEntities(text) {
+	return [...iexpandEntities(text)].join("");
+}
+
 const RE_TAG = new RegExp(
 	[
 		"(?<DOCTYPE>\\<\\!DOCTYPE\\s+(?<doctype>[^\\>]+)\\>\r?\n)|",
@@ -110,12 +152,12 @@ const RE_TAG = new RegExp(
 	"mg"
 );
 
-const RE_ATTR_SEP = /[=\s]/
+const RE_ATTR_SEP = /[=\s]/;
 
 export const parseAttributes = (text, attributes = {}) => {
 	// FIXME: We should not do trim or substring, we should
 	// just parse the string as is.
-	const m = text.match(RE_ATTR_SEP)
+	const m = text.match(RE_ATTR_SEP);
 
 	if (!m) {
 		const spaceIndex = text.indexOf(" ");
@@ -144,8 +186,8 @@ export const parseAttributes = (text, attributes = {}) => {
 			chr === "'"
 				? text.indexOf("'", m.index + 2)
 				: chr === '"'
-					? text.indexOf('"', m.index + 2)
-					: text.indexOf(" ", m.index);
+				? text.indexOf('"', m.index + 2)
+				: text.indexOf(" ", m.index);
 
 		const value =
 			end === -1
@@ -161,7 +203,10 @@ export const parseAttributes = (text, attributes = {}) => {
 		parseAttributes(text.substring(end + 1).trim(), attributes);
 	} else {
 		attributes[text.substring(0, m.index).trim()] = null;
-		parseAttributes(text.substring(m.index + m[0].length).trim(), attributes);
+		parseAttributes(
+			text.substring(m.index + m[0].length).trim(),
+			attributes
+		);
 	}
 
 	return attributes;
@@ -204,8 +249,8 @@ function* iterMarkers(text) {
 			const t = match.groups.closing
 				? MarkerType.End
 				: is_inline
-					? MarkerType.Inline
-					: MarkerType.Start;
+				? MarkerType.Inline
+				: MarkerType.Start;
 			yield new Marker(t, fragment, name, attr);
 		}
 	}
@@ -217,7 +262,7 @@ const Operator = {
 		node.children.push(child);
 		return node;
 	},
-	setNodeEnd: () => { },
+	setNodeEnd: () => {},
 };
 
 // --
@@ -231,24 +276,33 @@ export class DOMOperator {
 		node.appendChild(child);
 		return node;
 	}
-	setNodeEnd() { }
+	setNodeEnd() {}
 	createNode(marker) {
 		switch (marker.type) {
 			case "Content":
-				return this.document.createTextNode(marker.text);
+				return this.document.createTextNode(
+					expandEntities(marker.text)
+				);
 			case "Start":
 			case "Inline":
 				switch (marker.name) {
 					case "!CDATA":
-						return this.document.createTextNode(marker.text);
+						return this.document.createTextNode(
+							expandEntities(marker.text)
+						);
 					case "--":
-						return this.document.createComment(marker.text);
+						return this.document.createComment(
+							expandEntities(marker.text)
+						);
 					case "!DOCTYPE":
 						break;
 					default: {
 						const node = this.document.createElement(marker.name);
 						for (const attr in marker.attributes) {
-							node.setAttribute(attr, marker.attributes[attr]);
+							node.setAttribute(
+								attr,
+								expandEntities(marker.attributes[attr])
+							);
 						}
 						return node;
 					}
@@ -259,6 +313,7 @@ export class DOMOperator {
 		}
 	}
 
+	// FIXME: Is this event used?
 	createComment(data) {
 		return this.document.createComment(data);
 	}
@@ -334,5 +389,5 @@ function parseHTML(text, operator = new DOMOperator()) {
 }
 
 export default { DOMParser };
-export { parseHTML }
+export { parseHTML };
 // EOF
