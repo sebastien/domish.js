@@ -151,6 +151,14 @@ export class Node {
 			.join("");
 	}
 
+	get innerText() {
+		return this.toText();
+	}
+
+	querySelector(query) {
+		return this.querySelectorAll(query)[0];
+	}
+
 	querySelectorAll(query) {
 		let scope = [this];
 		for (const qs of query.split(/\s+/)) {
@@ -326,6 +334,30 @@ export class Node {
 
 	// --
 	// ### Serialization
+	*iterText(options) {
+		switch (this.nodeType) {
+			case Node.DOCUMENT_NODE:
+			case Node.DOCUMENT_FRAGMENT_NODE:
+			case Node.ELEMENT_NODE:
+				for (const n of this.childNodes) {
+					for (const l of n.iterText(options)) {
+						yield l;
+					}
+				}
+				break;
+			case Node.TEXT_NODE:
+				// FIXME: This is not the right way to do it
+				yield this.data
+					.replaceAll("&", "&amp;")
+					.replaceAll(">", "&gt;")
+					.replaceAll("<", "&lt;");
+				break;
+		}
+	}
+
+	toText(options) {
+		return [...this.iterText(options)].join("");
+	}
 
 	// TODO: iterXMLLines
 	toXMLLines(options) {
@@ -639,10 +671,16 @@ export class DocumentFragment extends Node {
 }
 
 export class Document extends Node {
-	constructor() {
+	constructor(nodes) {
 		super("#document", Node.DOCUMENT_NODE);
 		this.body = new Element("body");
 		this._elements = new Array();
+		// Non standard
+		if (nodes) {
+			for (const node of nodes) {
+				node && this.appendChild(node);
+			}
+		}
 	}
 
 	getElementById(id) {

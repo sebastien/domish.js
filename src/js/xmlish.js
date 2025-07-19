@@ -268,11 +268,34 @@ const Operator = {
 // --
 // HTML Parser courtesy of Bard
 
+function findParent(node, name) {
+	let cur = node?.parentElement;
+	name = name.toLowerCase();
+	while (cur && (cur?.nodeName ?? "").toLowerCase() !== name) {
+		cur = cur?.parentElement;
+	}
+	return cur;
+}
 export class DOMOperator {
-	constructor() {
+	constructor(fix = true) {
 		this.document = new Document();
+		this.fix = fix;
 	}
 	appendChild(node, child) {
+		// --
+		// This is where we can collect fixes for HTML nodes.
+		if (this.fix) {
+			// In old HTML, <DD> and <DT> may not have closing tags, so we
+			// fix it there.
+			switch (child?.nodeName) {
+				case "DD":
+				case "dd":
+				case "DT":
+				case "dt":
+					node = findParent(node, "dl") ?? node;
+					break;
+			}
+		}
 		node.appendChild(child);
 		return node;
 	}
@@ -295,6 +318,7 @@ export class DOMOperator {
 							expandEntities(marker.text)
 						);
 					case "!DOCTYPE":
+						// TODO: Support this
 						break;
 					default: {
 						const node = this.document.createElement(marker.name);
@@ -354,7 +378,9 @@ class Builder {
 				} // FIXME: We haven't found a matching tag
 			} else {
 				const node = this.operator.createNode(marker);
-				if (current) {
+				if (node === null) {
+					// TODO: This happens for !DOCTYPE, we should support this.
+				} else if (current) {
 					this.operator.appendChild(current, node);
 				} else {
 					roots.push(node);
@@ -366,7 +392,6 @@ class Builder {
 				}
 			}
 		}
-
 		return roots;
 	}
 }
