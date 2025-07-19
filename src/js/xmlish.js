@@ -142,12 +142,17 @@ function expandEntities(text) {
 	return [...iexpandEntities(text)].join("");
 }
 
+// TODO: We need to manage `<path shape-rendering="geometricPrecision"/>`
+// where the end is />
+// const ATTR = `([A-Za-z0-9_-]:)?([A-Za-z0-9_-])(=("[^"]*"|'[^']*'|[^\s]+)?)?`
+// const ATTRS = `\s*${ATTR}(\s+${ATTR})*`
+
 const RE_TAG = new RegExp(
 	[
 		"(?<DOCTYPE>\\<\\!DOCTYPE\\s+(?<doctype>[^\\>]+)\\>\r?\n)|",
 		"(?<COMMENT>\\<\\!--(?<comment>([\r\n]|.)*?)--\\>)|",
 		"(?<CDATA><\\!\\[CDATA\\[(?<cdata>([\r\n]|.)*?)\\]\\]\\>)|",
-		"\\<(?<closing>/)?(?<qualname>(((?<ns>\\w+[\\d\\w_-]*):)?(?<name>[\\d\\w_\\-]+)))(?<attrs>\\s+[^\\>]*)?\\s*\\>",
+		`\\<(?<closing>/)?(?<qualname>(((?<ns>\\w+[\\d\\w_-]*):)?(?<name>[\\d\\w_\\-]+)))(?<attrs>\\s+[^\\>]*)?\\s*/?\\>`,
 	].join(""),
 	"mg"
 );
@@ -157,6 +162,9 @@ const RE_ATTR_SEP = /[=\s]/;
 export const parseAttributes = (text, attributes = {}) => {
 	// FIXME: We should not do trim or substring, we should
 	// just parse the string as is.
+	if (!text?.length) {
+		return;
+	}
 	const m = text.match(RE_ATTR_SEP);
 
 	if (!m) {
@@ -172,7 +180,8 @@ export const parseAttributes = (text, attributes = {}) => {
 			if (name) {
 				attributes[name] = null;
 			}
-			parseAttributes(text.substring(spaceIndex + 1), attributes);
+			console.log("A");
+			parseAttributes(text.substring(spaceIndex + 1).trim(), attributes);
 		}
 	} else if (m[0] === "=") {
 		const name = text.substring(0, m.index).trim();
@@ -194,15 +203,19 @@ export const parseAttributes = (text, attributes = {}) => {
 				? text.substring(m.index + 1).trim()
 				: text.substring(m.index + 1, end + 1);
 
-		if ((value && value[0] === "'") || value[0] === '"') {
+		if (!name) {
+			// Nothing
+		} else if ((value && value[0] === "'") || value[0] === '"') {
 			attributes[name] = value.substring(1, value.length - 1);
 		} else {
 			attributes[name] = value.trim();
 		}
-
 		parseAttributes(text.substring(end + 1).trim(), attributes);
 	} else {
-		attributes[text.substring(0, m.index).trim()] = null;
+		const name = text.substring(0, m.index).trim();
+		if (name) {
+			attributes[name] = null;
+		}
 		parseAttributes(
 			text.substring(m.index + m[0].length).trim(),
 			attributes
@@ -240,6 +253,7 @@ function* iterMarkers(text) {
 			yield new Marker(MarkerType.End, fragment.slice(-3), "--");
 		} else if ((name = match.groups.qualname)) {
 			// Handle regular tags
+			// FIXME: Parsing '"/>' will incldue the / in the attribtes
 			const attr = parseAttributes(match.groups.attrs || "");
 			let is_inline = false;
 			if (attr && "/" in attr) {
