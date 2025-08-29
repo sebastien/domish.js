@@ -1,7 +1,7 @@
 // This is a Bard-assisted port of my Python's XMLish module. It's a simple HTML/XML
 // parser that can be used in both SAX/DOM style.
 
-import { Document } from "./domish.js";
+import { Document, HTML_EMPTY } from "./domish.js";
 
 class Fragment {
 	/** Represents a text fragment. */
@@ -16,7 +16,7 @@ class Fragment {
 				if (offset !== match.index) {
 					yield new MatchFragment(
 						null,
-						new Fragment(text, offset, match.index)
+						new Fragment(text, offset, match.index),
 					);
 				}
 
@@ -26,8 +26,8 @@ class Fragment {
 					new Fragment(
 						text,
 						match.index,
-						match.index + match[0].length
-					)
+						match.index + match[0].length,
+					),
 				);
 
 				offset = Math.max(offset + 1, match.index + match[0].length);
@@ -53,8 +53,8 @@ class Fragment {
 	}
 
 	get text() {
-		// Implement unescape() function or use a suitable library
-		return unescape(this.rawtext);
+		// Return raw text as-is since entities are handled separately
+		return this.rawtext;
 	}
 
 	get rawtext() {
@@ -110,8 +110,12 @@ const ENTITIES = {
 };
 
 function* iexpandEntities(text) {
-	if (!text || text.length < 3) {
-		return text;
+	if (!text) {
+		return;
+	}
+	if (text.length < 3) {
+		yield text;
+		return;
 	}
 	let match = null;
 	let o = 0;
@@ -133,7 +137,7 @@ function* iexpandEntities(text) {
 		}
 		o = end;
 	}
-	if (o + 1 < text.length) {
+	if (o < text.length) {
 		yield text.substring(o);
 	}
 }
@@ -154,7 +158,7 @@ const RE_TAG = new RegExp(
 		"(?<CDATA><\\!\\[CDATA\\[(?<cdata>([\r\n]|.)*?)\\]\\]\\>)|",
 		`\\<(?<closing>/)?(?<qualname>(((?<ns>\\w+[\\d\\w_-]*):)?(?<name>[\\d\\w_\\-]+)))(?<attrs>\\s+[^\\>]*)?\\s*/?\\>`,
 	].join(""),
-	"mg"
+	"mg",
 );
 
 const RE_ATTR_SEP = /[=\s]/;
@@ -180,7 +184,6 @@ export const parseAttributes = (text, attributes = {}) => {
 			if (name) {
 				attributes[name] = null;
 			}
-			console.log("A");
 			parseAttributes(text.substring(spaceIndex + 1).trim(), attributes);
 		}
 	} else if (m[0] === "=") {
@@ -195,8 +198,8 @@ export const parseAttributes = (text, attributes = {}) => {
 			chr === "'"
 				? text.indexOf("'", m.index + 2)
 				: chr === '"'
-				? text.indexOf('"', m.index + 2)
-				: text.indexOf(" ", m.index);
+					? text.indexOf('"', m.index + 2)
+					: text.indexOf(" ", m.index);
 
 		const value =
 			end === -1
@@ -218,7 +221,7 @@ export const parseAttributes = (text, attributes = {}) => {
 		}
 		parseAttributes(
 			text.substring(m.index + m[0].length).trim(),
-			attributes
+			attributes,
 		);
 	}
 
@@ -242,7 +245,7 @@ function* iterMarkers(text) {
 			yield new Marker(
 				MarkerType.Start,
 				fragment.slice(0, 10),
-				"!DOCTYPE"
+				"!DOCTYPE",
 			);
 			yield new Marker(MarkerType.Content, fragment.slice(10, -2));
 			yield new Marker(MarkerType.End, fragment.slice(-2), "!DOCTYPE");
@@ -253,19 +256,25 @@ function* iterMarkers(text) {
 			yield new Marker(MarkerType.End, fragment.slice(-3), "--");
 		} else if ((name = match.groups.qualname)) {
 			// Handle regular tags
-			// FIXME: Parsing '"/>' will incldue the / in the attribtes
+			// FIXME: Parsing '"/>' will incldue the / in the attributes
 			const attr = parseAttributes(match.groups.attrs || "");
 			let is_inline = false;
 			if (attr && "/" in attr) {
 				delete attr["/"];
 				is_inline = true;
 			}
+			// Check if this is an HTML empty element (self-closing)
+			if (HTML_EMPTY.has(name.toLowerCase())) {
+				is_inline = true;
+			}
 			const t = match.groups.closing
 				? MarkerType.End
 				: is_inline
-				? MarkerType.Inline
-				: MarkerType.Start;
+					? MarkerType.Inline
+					: MarkerType.Start;
 			yield new Marker(t, fragment, name, attr);
+		} else {
+			// TODO: What's that use case for?
 		}
 	}
 }
@@ -318,18 +327,18 @@ export class DOMOperator {
 		switch (marker.type) {
 			case "Content":
 				return this.document.createTextNode(
-					expandEntities(marker.text)
+					expandEntities(marker.text),
 				);
 			case "Start":
 			case "Inline":
 				switch (marker.name) {
 					case "!CDATA":
 						return this.document.createTextNode(
-							expandEntities(marker.text)
+							expandEntities(marker.text),
 						);
 					case "--":
 						return this.document.createComment(
-							expandEntities(marker.text)
+							expandEntities(marker.text),
 						);
 					case "!DOCTYPE":
 						// TODO: Support this
@@ -339,7 +348,7 @@ export class DOMOperator {
 						for (const attr in marker.attributes) {
 							node.setAttribute(
 								attr,
-								expandEntities(marker.attributes[attr])
+								expandEntities(marker.attributes[attr]),
 							);
 						}
 						return node;

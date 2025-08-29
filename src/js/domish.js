@@ -38,6 +38,8 @@ const HTML_EMPTY = tags(
 
 const HTML_NOEMPTY = tags("slot");
 
+export { HTML_EMPTY };
+
 //
 // ### Query Support
 const RE_QUERY =
@@ -339,6 +341,11 @@ export class Node {
 			case Node.DOCUMENT_NODE:
 			case Node.DOCUMENT_FRAGMENT_NODE:
 			case Node.ELEMENT_NODE:
+				// Handle <br> elements as newlines
+				if (this.nodeName && this.nodeName.toLowerCase() === 'br') {
+					yield '\n';
+					return;
+				}
 				for (const n of this.childNodes) {
 					for (const l of n.iterText(options)) {
 						yield l;
