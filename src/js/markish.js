@@ -98,14 +98,16 @@ function* imarkdown(node, context = {}) {
 					case "h6":
 					case "h7":
 						yield `\n${prefix}${Array(
-							parseInt(name.at(1)) + 1
+							parseInt(name.at(1)) + 1,
 						).join("#")} `;
 						suffix = "\n";
 						break;
 					case "blockquote":
 						{
 							const lines = [...node.childNodes]
-								.map((_) => [...imarkdown(_)].join(""))
+								.map((_) =>
+									[...iunspace(imarkdown(_))].join(""),
+								)
 								.join("")
 								.split("\n");
 							yield "\n";
@@ -127,7 +129,7 @@ function* imarkdown(node, context = {}) {
 					case "tr":
 						yield "\n|| ";
 						yield [...node.children]
-							.map((_) => [...imarkdown(_)].join(""))
+							.map((_) => [...iunspace(imarkdown(_))].join(""))
 							.join(" || ");
 						children = null;
 						yield " ||";
