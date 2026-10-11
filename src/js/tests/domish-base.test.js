@@ -121,6 +121,23 @@ describe("Element class", () => {
     element.setAttribute("id", "my-id");
     expect(element.id).toBe("my-id");
   });
+  test("setAttribute reuses the attribute node on overwrite", () => {
+    element.setAttribute("key", "one");
+    const attribute = element.getAttributeNode("key");
+    element.setAttribute("key", "two");
+    expect(element.getAttributeNode("key")).toBe(attribute);
+    expect(attribute.value).toBe("two");
+    expect(element.getAttribute("key")).toBe("two");
+  });
+  test("setAttributeNS reuses the attribute node on overwrite", () => {
+    const namespace = "http://www.w3.org/1999/xlink";
+    element.setAttributeNS(namespace, "href", "one");
+    const attribute = element.getAttributeNodeNS(namespace, "href");
+    element.setAttributeNS(namespace, "href", "two");
+    expect(element.getAttributeNodeNS(namespace, "href")).toBe(attribute);
+    expect(attribute.value).toBe("two");
+    expect(element.getAttributeNS(namespace, "href")).toBe("two");
+  });
   test("style object", () => {
     element.style.color = "red";
     element.style.backgroundColor = "blue";
@@ -176,6 +193,45 @@ describe("Document class", () => {
     expect(doc.getElementById("test-id")).toBe(el);
     expect(doc.getElementById("nonexistent")).toBeNull();
   });
+  test("getElementById tracks id changes", () => {
+    const el = doc.createElement("div");
+    el.setAttribute("id", "first");
+    expect(doc.getElementById("first")).toBe(el);
+    el.setAttribute("id", "second");
+    expect(doc.getElementById("first")).toBeNull();
+    expect(doc.getElementById("second")).toBe(el);
+    el.removeAttribute("id");
+    expect(doc.getElementById("second")).toBeNull();
+    expect(el.id).toBeNull();
+  });
+  test("getElementById with duplicate ids returns the first registered", () => {
+    const first = doc.createElement("div");
+    first.setAttribute("id", "dup");
+    const second = doc.createElement("div");
+    second.setAttribute("id", "dup");
+    expect(doc.getElementById("dup")).toBe(first);
+    first.setAttribute("id", "other");
+    expect(doc.getElementById("dup")).toBe(second);
+  });
+  test("getElementById tracks attribute nodes", () => {
+    const el = doc.createElement("div");
+    const attribute = doc.createAttribute("id");
+    attribute.value = "via-node";
+    el.setAttributeNode(attribute);
+    expect(doc.getElementById("via-node")).toBe(el);
+    attribute.value = "renamed";
+    expect(doc.getElementById("via-node")).toBeNull();
+    expect(doc.getElementById("renamed")).toBe(el);
+    el.removeAttributeNode(attribute);
+    expect(doc.getElementById("renamed")).toBeNull();
+  });
+  test("getElementById ignores elements from other documents", () => {
+    const other = new Document;
+    const el = other.createElement("div");
+    el.setAttribute("id", "elsewhere");
+    expect(doc.getElementById("elsewhere")).toBeNull();
+    expect(other.getElementById("elsewhere")).toBe(el);
+  });
   test("createElement with template", () => {
     const template = doc.createElement("template");
     expect(template).toBeInstanceOf(TemplateElement);
@@ -211,6 +267,80 @@ describe("TreeWalker", () => {
       node = walker.nextNode();
     }
     expect(nodes).toEqual(["#text"]);
+  });
+  test("visits every element in document order", () => {
+    const doc = new Document;
+    const root = doc.createElement("root");
+    const make = (name) => doc.createElement(name);
+    const a = make("a");
+    const a1 = make("a1");
+    a1.appendChild(make("a1x"));
+    a.appendChild(a1);
+    a.appendChild(make("a2"));
+    const b = make("b");
+    const c = make("c");
+    c.appendChild(make("c1"));
+    root.appendChild(a);
+    root.appendChild(b);
+    root.appendChild(c);
+    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    const names = [];
+    let node = walker.nextNode();
+    while (node) {
+      names.push(node.nodeName);
+      node = walker.nextNode();
+    }
+    expect(names).toEqual(["a", "a1", "a1x", "a2", "b", "c", "c1"]);
+  });
+  test("descends through filtered-out nodes", () => {
+    const doc = new Document;
+    const root = doc.createElement("root");
+    root.appendChild(doc.createComment("skip"));
+    const a = doc.createElement("a");
+    a.appendChild(doc.createComment("skip"));
+    a.appendChild(doc.createElement("child"));
+    root.appendChild(a);
+    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    const names = [];
+    let node = walker.nextNode();
+    while (node) {
+      names.push(node.nodeName);
+      node = walker.nextNode();
+    }
+    expect(names).toEqual(["a", "child"]);
+  });
+  test("resumes from an externally assigned currentNode", () => {
+    const doc = new Document;
+    const root = doc.createElement("root");
+    const a = doc.createElement("a");
+    const a1 = doc.createElement("a1");
+    a1.appendChild(doc.createElement("a1x"));
+    a.appendChild(a1);
+    a.appendChild(doc.createElement("a2"));
+    root.appendChild(a);
+    root.appendChild(doc.createElement("b"));
+    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    walker.currentNode = a1;
+    const names = [];
+    let node = walker.nextNode();
+    while (node) {
+      names.push(node.nodeName);
+      node = walker.nextNode();
+    }
+    expect(names).toEqual(["a1x", "a2", "b"]);
+  });
+  test("walks a wide parent without quadratic sibling scans", () => {
+    const doc = new Document;
+    const root = doc.createElement("root");
+    for (let i = 0;i < 500;i++) {
+      root.appendChild(doc.createElement(`c${i}`));
+    }
+    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    let count = 0;
+    while (walker.nextNode()) {
+      count++;
+    }
+    expect(count).toBe(500);
   });
 });
 describe("DOM tree operations", () => {
@@ -520,6 +650,32 @@ describe("querySelector/querySelectorAll matching", () => {
     const root = doc.createElement("div");
     expect(root.querySelector("span")).toBeUndefined();
   });
+  test("querySelector returns the first match in document order", () => {
+    const root = doc.createElement("div");
+    const first = doc.createElement("span");
+    const second = doc.createElement("span");
+    root.appendChild(first);
+    root.appendChild(second);
+    expect(root.querySelector("span")).toBe(first);
+    expect(root.querySelectorAll("span")[0]).toBe(first);
+  });
+  test("querySelector with descendant combinator", () => {
+    const root = doc.createElement("div");
+    const ul = doc.createElement("ul");
+    const li = doc.createElement("li");
+    root.appendChild(ul);
+    ul.appendChild(li);
+    expect(root.querySelector("ul li")).toBe(li);
+    expect(root.querySelectorAll("ul li")).toEqual([li]);
+  });
+  test("querySelector finds nested matches that querySelectorAll also finds", () => {
+    const root = doc.createElement("div");
+    const outer = doc.createElement("span");
+    const inner = doc.createElement("span");
+    root.appendChild(outer);
+    outer.appendChild(inner);
+    expect(root.querySelector("span")).toBe(root.querySelectorAll("span")[0]);
+  });
 });
 describe("document.querySelector searches through body", () => {
   test("document.querySelector finds elements appended to body", () => {
@@ -568,5 +724,110 @@ describe("install creates fresh document", () => {
     const el = globalThis.document.createElement("span");
     globalThis.document.body.appendChild(el);
     expect(globalThis.document.body.querySelector("span")).toBe(el);
+  });
+});
+describe("Serialization builders and generators", () => {
+  const makeTree = () => {
+    const doc = new Document;
+    const div = doc.createElement("div");
+    div.setAttribute("class", "box");
+    div.setAttribute("id", "box-1");
+    div.style.color = "red";
+    div.appendChild(doc.createTextNode("a < b & c"));
+    div.appendChild(doc.createComment("note"));
+    const br = doc.createElement("br");
+    div.appendChild(br);
+    doc.body.appendChild(div);
+    return doc;
+  };
+  test("outerHTML matches iterXMLLines chunks", () => {
+    const doc = makeTree();
+    const chunks = [...doc.body.firstChild.iterXMLLines({ html: true })];
+    expect(doc.body.firstChild.outerHTML).toBe(chunks.join(""));
+  });
+  test("innerHTML matches iterXMLLines of each child", () => {
+    const doc = makeTree();
+    const expected = doc.body.childNodes.map((child) => [...child.iterXMLLines({ html: true })].join("")).join("");
+    expect(doc.body.innerHTML).toBe(expected);
+  });
+  test("toXML and toHTML match their generator output", () => {
+    const doc = makeTree();
+    const node = doc.body.firstChild;
+    expect(node.toXML()).toBe([...node.iterXMLLines()].join(""));
+    expect(node.toHTML()).toBe([...node.iterXMLLines({ html: true })].join(""));
+  });
+  test("toText matches iterText chunks", () => {
+    const doc = makeTree();
+    const node = doc.body.firstChild;
+    expect(node.toText()).toBe([...node.iterText()].join(""));
+    // textContent includes the comment data and is not escaped
+    expect(node.textContent).toBe("a < b & cnote");
+  });
+  test("escaping is applied to text and comments", () => {
+    const doc = makeTree();
+    expect(doc.body.firstChild.toHTML()).toContain("a &lt; b &amp; c");
+    expect(doc.body.firstChild.toHTML()).toContain("<!--note-->");
+  });
+  test("inline styles serialize with kebab-case property names", () => {
+    const doc = new Document;
+    const div = doc.createElement("div");
+    div.style.backgroundColor = "blue";
+    div.style.zIndex = 3;
+    expect(div.toHTML()).toContain(' style="background-color: blue;z-index: 3"');
+  });
+  test("textContent collects leaves across a nested tree", () => {
+    const doc = new Document;
+    const root = doc.createElement("div");
+    const mid = doc.createElement("p");
+    const leaf = doc.createElement("b");
+    leaf.appendChild(doc.createTextNode("deep"));
+    mid.appendChild(leaf);
+    mid.appendChild(doc.createTextNode(" mid"));
+    root.appendChild(mid);
+    root.appendChild(doc.createTextNode(" top"));
+    expect(root.textContent).toBe("deep mid top");
+    // toText agrees here: no characters need escaping in this tree
+    expect(root.toText()).toBe("deep mid top");
+  });
+  test("cloneNode preserves inline styles and stylesheet rules", () => {
+    const doc = new Document;
+    const div = doc.createElement("div");
+    div.style.color = "red";
+    const clone = div.cloneNode(false);
+    expect(clone.style.color).toBe("red");
+    expect(clone.toHTML()).toContain('style="color: red"');
+    const style = doc.createElement("style");
+    style.sheet.insertRule(".a { color: red; }");
+    const styleClone = style.cloneNode(false);
+    expect(styleClone.sheet.cssRules).toEqual([".a { color: red; }"]);
+  });
+});
+describe("Query cache", () => {
+  test("repeated and interleaved selectors stay correct", () => {
+    const doc = new Document;
+    const root = doc.createElement("div");
+    const a = doc.createElement("span");
+    a.setAttribute("class", "first");
+    const b = doc.createElement("i");
+    b.setAttribute("class", "second");
+    root.appendChild(a);
+    root.appendChild(b);
+    doc.body.appendChild(root);
+    for (let i = 0;i < 3;i++) {
+      expect(root.querySelectorAll(".first")).toEqual([a]);
+      expect(root.querySelectorAll(".second")).toEqual([b]);
+      expect(root.querySelectorAll("span")).toEqual([a]);
+      expect(root.querySelector("i")).toBe(b);
+      expect(a.matches(".first")).toBe(true);
+      expect(b.matches(".first")).toBe(false);
+    }
+  });
+  test("querySelector and querySelectorAll agree on the cached query", () => {
+    const doc = new Document;
+    const root = doc.createElement("div");
+    const span = doc.createElement("span");
+    root.appendChild(span);
+    doc.body.appendChild(root);
+    expect(root.querySelector("span")).toBe(root.querySelectorAll("span")[0]);
   });
 });

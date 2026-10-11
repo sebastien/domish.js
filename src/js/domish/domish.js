@@ -27,7 +27,7 @@
 // Class: Query
 // Parses CSS selectors and matches them against DOM nodes. Supports element
 // selectors, class selectors (.class), ID selectors (#id), and attribute
-// selectors ([attr]).
+// selectors ([attr]). Instances are parsed once and shared through `Query.of`.
 //
 // Attributes:
 // - text: string - the raw selector string
@@ -66,9 +66,10 @@
 // - childNodes: Node[] - array of child nodes
 // - parentNode: Node | null - parent node or null if detached
 // - data: string - text data for text/comment nodes
-// - _eventListeners: Map<string, Set<EventListener>> - internal event storage
+// - _eventListeners: Map<string, Set<EventListener>> | undefined - internal
+//   event storage, allocated lazily on the first `addEventListener` call
 	// Method: iterWalk
-	// Recursively traverses the node tree, calling `callback` for each node.
+	// Traverses the node tree in pre-order, calling `callback` for each node.
 	// Stop iteration by returning `false` from the callback.
 	// Property: outerHTML
 	// Returns the HTML serialization of this node including its descendants.
@@ -158,6 +159,18 @@
 	// ============================================================================
 	// SUBSECTION: Serialization
 	// ============================================================================
+	// Serialization is implemented by the `_writeText`/`_writeXML` methods,
+	// which append chunks to a plain array that the caller joins once. The
+	// `iterText` and `iterXMLLines` generators remain available for streaming
+	// consumers; `toText`, `toXMLLines`, `toXML` and `toHTML` are thin
+	// wrappers over the array builders.
+	// Method: _writeText
+	// Appends the text serialization of this node and its descendants to the
+	// `out` array. Handles <br> elements as newlines and escapes HTML entities
+	// in text nodes.
+	// Method: _writeXML
+	// Appends the XML/HTML serialization of this node and its descendants to
+	// the `out` array, following `options` (html, comments, doctype).
 	// Method: iterText
 	// Generator that yields text content from this node and its descendants.
 	// Handles <br> elements as newlines and escapes HTML entities in text nodes.
@@ -183,6 +196,9 @@
 	// Attaches this node to `parentNode`, detaching from current parent first.
 	// Method: _getSiblingAt
 	// Returns the sibling at `index + offset` in the parent's children.
+	// Method: _firstMatch
+	// Returns the first descendant (self included) matching a parsed query,
+	// stopping at the first hit. Used by `querySelector`.
 // ----------------------------------------------------------------------------
 //
 // ATTRIBUTES
@@ -226,7 +242,8 @@
 // - _attributesNS: Map<string, Map<string, AttributeNode>> - namespaced attributes
 // - classList: TokenList - class attribute manipulation interface
 // - sheet: StyleSheet | null - stylesheet for <style> elements, null otherwise
-// - dataset: any - data-* attribute access via proxy
+// - dataset: Proxy - data-* attribute access, created lazily on first use
+// - _document: Document | undefined - owning document, set by `Document._register`
 //
 // Example:
 // ```typescript
@@ -345,7 +362,9 @@
 //
 // Properties:
 // - body: Element - the document body element
-// - _elements: Element[] - internal registry of created elements
+// - _idIndex: Map<string, Set<Element>> - id to elements index, maintained by
+//   the Element attribute methods; each Set keeps elements in id assignment
+//   order so the oldest holder wins for duplicate ids
 //
 // Example:
 // ```typescript
@@ -355,11 +374,14 @@
 // ```
 		// Non standard: optionally append initial nodes
 	// Method: getElementById
-	// Returns the element with `id`, or null if not found.
+	// Returns the element with `id`, or null if not found. Uses the id index
+	// (see `_idIndex`) instead of scanning created elements.
 	// Method: querySelectorAll
 	// Overrides Node.querySelectorAll to also search through `document.body`
 	// which may not be in the document's child node list (matching browser
 	// behaviour where `document.querySelector` always searches the full tree).
+	// Method: querySelector
+	// Overrides Node.querySelector to apply the same `document.body` fallback.
 		// Fallback: search through body if not already in childNodes.
 	// Method: createTreeWalker
 	// Creates a TreeWalker for traversing the DOM starting at `node`.
@@ -377,7 +399,8 @@
 	// Method: createElementNS
 	// Creates a new Element with `name` in `namespace`.
 	// Method: _register
-	// Internal method to register an element for getElementById lookups.
+	// Internal method that records `element`'s owning document so that its
+	// `id` attribute can be kept in the `_idIndex` lookup map.
 // ----------------------------------------------------------------------------
 //
 // TREE WALKER
@@ -400,6 +423,9 @@
 // - currentNode: Node - current position in the iteration
 // - nodeFilter: number - bitmask of NodeFilter constants
 // - predicate: (node: Node) => boolean - optional custom filter function
+// - _stack: [Node, number][] - descent stack of [parent, nextChildIndex]
+//   pairs backing the traversal; rebuilt when `currentNode` is assigned
+//   externally
 	// Method: nextNode
 	// Advances to the next node matching the filter and returns it, or null.
 // ----------------------------------------------------------------------------
@@ -487,21 +513,53 @@ const tags = (...tags) => tags.reduce((r, v) => {
 }, new Map);
 const HTML_EMPTY = tags("area", "base", "basefont", "br", "col", "frame", "hr", "img", "input", "isindex", "link", "meta", "param");
 const HTML_NOEMPTY = tags("slot");
+// Escapes `&`, `>` and `<` in one pass over the text (see Serialization)
+const escapeXML = (text) => text.replace(/&/g, "&amp;").replace(/>/g, "&gt;").replace(/</g, "&lt;");
+// Shared options for HTML serialization (read-only, see _writeXML)
+const HTML_OPTIONS = { html: true };
 const RE_QUERY = /((?<type>[.#]?)(?<name>[\w\d_-]+))|(\[(?<attributes>[^\]]+)\])/g;
 const RE_QUERY_ATTR = /^(?<name>\w+)((?<operator>[~|^$*]?=)("(?<value_0>[^"]+)"|'(?<value_1>[^']+)'|(?<value_2>[^\]]+)))?$/;
+// Parsed queries, keyed by selector text. Parsing runs two regexes per
+// selector token, which dominates `matches`/`querySelectorAll` when they are
+// called in a loop with a constant selector. Bounded to avoid unbounded
+// growth when selectors are built dynamically: the cache is simply cleared.
+const QUERY_CACHE = new Map;
+const QUERY_CACHE_MAX = 512;
 
 class Query {
   text;
   selectors;
+  // Function: Query.of
+  // Returns the cached `Query` for `query`, parsing it on first use.
+  //
+  // Parameters:
+  // - query: string - the selector text
+  //
+  // Returns:
+  // Query - the shared parsed query (do not mutate)
+  static of(query) {
+    let parsed = QUERY_CACHE.get(query);
+    if (parsed === undefined) {
+      if (QUERY_CACHE.size >= QUERY_CACHE_MAX) {
+        QUERY_CACHE.clear();
+      }
+      parsed = new Query(query);
+      QUERY_CACHE.set(query, parsed);
+    }
+    return parsed;
+  }
   constructor(query) {
     this.text = query;
     const matches = [...query.matchAll(RE_QUERY)];
     this.selectors = matches ? matches.map((match) => {
       const g = match.groups;
       const attrs = g?.attributes ? g.attributes.match(RE_QUERY_ATTR)?.groups : null;
+      const name = match.groups?.name || "";
       return {
         type: match.groups?.attributes ? "@" : match.groups?.type || "",
-        name: match.groups?.name || "",
+        name: name,
+        // Precomputed so tag matching does not re-lowercase per tested node
+        lowerName: name.toLowerCase(),
         attributes: attrs ? {
           ...attrs,
           value: attrs.value_0 || attrs.value_1 || attrs.value_2
@@ -514,13 +572,13 @@ class Query {
       const selector = this.selectors[i];
       if (!selector)
         continue;
-      const { type, name, attributes } = selector;
+      const { type, name, lowerName, attributes } = selector;
       if (node.nodeType !== Node.ELEMENT_NODE) {
         return false;
       }
       switch (type) {
         case "":
-          if (node.nodeName !== name && node.nodeName.toLowerCase() !== name.toLowerCase()) {
+          if (node.nodeName !== name && node.nodeName.toLowerCase() !== lowerName) {
             return false;
           }
           break;
@@ -575,32 +633,90 @@ class Node {
     this.childNodes = [];
     this.parentNode = null;
     this.data = "";
-    this._eventListeners = new Map;
+    // Lazily created by `addEventListener` (see Event Methods)
+    this._eventListeners = undefined;
   }
   iterWalk(callback) {
-    if (callback(this) !== false) {
-      this.childNodes.forEach((_) => {
-        _.iterWalk(callback);
-      });
+    // Iterative pre-order traversal: no closure or call frame per child
+    const stack = [this];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (callback(node) === false) {
+        continue;
+      }
+      const children = node.childNodes;
+      for (let i = children.length - 1;i >= 0;i--) {
+        stack.push(children[i]);
+      }
     }
   }
   get outerHTML() {
-    return this.toXMLLines({ html: true }).join("");
+    const out = [];
+    this._writeXML(out, HTML_OPTIONS);
+    return out.join("");
   }
   get innerHTML() {
-    return this.childNodes.map((_) => _.toXMLLines({ html: true }).join("")).join("");
+    const out = [];
+    for (const child of this.childNodes) {
+      child._writeXML(out, HTML_OPTIONS);
+    }
+    return out.join("");
   }
   get innerText() {
     return this.toText();
   }
   querySelector(query) {
-    return this.querySelectorAll(query)[0];
+    if (!query) {
+      return undefined;
+    }
+    const tokens = query.split(/\s+/);
+    let lastIndex = -1;
+    for (let i = 0;i < tokens.length; i++) {
+      if (tokens[i]) {
+        lastIndex = i;
+      }
+    }
+    if (lastIndex < 0) {
+      // No selector token: querySelectorAll returns the scope itself
+      return this;
+    }
+    let scope = [this];
+    for (let i = 0;i < tokens.length; i++) {
+      const qs = tokens[i];
+      if (!qs) {
+        continue;
+      }
+      const q = Query.of(qs);
+      if (i === lastIndex) {
+        // Last token: stop at the first match instead of collecting them all
+        for (const n of scope) {
+          const found = n._firstMatch(q);
+          if (found !== undefined) {
+            return found;
+          }
+        }
+        return undefined;
+      }
+      const matched = [];
+      for (const n of scope) {
+        n.iterWalk((_) => {
+          if (q.match(_))
+            matched.push(_);
+          return;
+        });
+      }
+      scope = matched;
+      if (scope.length === 0) {
+        return undefined;
+      }
+    }
+    return undefined;
   }
   querySelectorAll(query) {
     let scope = [this];
     for (const qs of query.split(/\s+/)) {
       if (qs) {
-        const q = new Query(qs);
+        const q = Query.of(qs);
         const matched = [];
         for (const n of scope) {
           n.iterWalk((_) => {
@@ -618,7 +734,7 @@ class Node {
     return query ? scope : [];
   }
   matches(query) {
-    return new Query(query).match(this);
+    return Query.of(query).match(this);
   }
   get children() {
     return this.childNodes.filter((_) => _.nodeType === Node.ELEMENT_NODE);
@@ -646,7 +762,9 @@ class Node {
     return this.parentNode;
   }
   get textContent() {
-    return this.childNodes.length ? this.childNodes.map((_) => _.textContent).join("") : this.data;
+    const parts = [];
+    this._collectText(parts);
+    return parts.join("");
   }
   get isConnected() {
     return;
@@ -695,9 +813,13 @@ class Node {
     n.nodeType = this.nodeType;
     n.data = this.data;
     n.parentNode = null;
-    n._eventListeners = new Map;
-    for (const [type, listeners] of this._eventListeners.entries()) {
-      n._eventListeners.set(type, new Set(listeners));
+    n._eventListeners = undefined;
+    if (this._eventListeners) {
+      const cloned = new Map;
+      for (const [type, listeners] of this._eventListeners.entries()) {
+        cloned.set(type, new Set(listeners));
+      }
+      n._eventListeners = cloned;
     }
     n.childNodes = deep ? this.childNodes.map((_) => {
       const r = _.cloneNode(deep);
@@ -751,17 +873,27 @@ class Node {
     return newNode;
   }
   addEventListener(type, listener) {
-    if (!this._eventListeners.has(type)) {
-      this._eventListeners.set(type, new Set);
+    let listeners = this._eventListeners;
+    if (listeners === undefined) {
+      listeners = new Map;
+      this._eventListeners = listeners;
     }
-    this._eventListeners.get(type)?.add(listener);
+    let set = listeners.get(type);
+    if (set === undefined) {
+      set = new Set;
+      listeners.set(type, set);
+    }
+    set.add(listener);
   }
   removeEventListener(type, listener) {
-    const listeners = this._eventListeners.get(type);
+    const listeners = this._eventListeners;
     if (listeners) {
-      listeners.delete(listener);
-      if (listeners.size === 0) {
-        this._eventListeners.delete(type);
+      const set = listeners.get(type);
+      if (set) {
+        set.delete(listener);
+        if (set.size === 0) {
+          listeners.delete(type);
+        }
       }
     }
   }
@@ -782,7 +914,7 @@ class Node {
         event._setEventPhase(3);
       }
       event._setCurrentTarget(node);
-      const listeners = node._eventListeners.get(event.type);
+      const listeners = node._eventListeners?.get(event.type);
       if (listeners) {
         for (const listener of listeners) {
           if (event._isImmediatePropagationStopped) {
@@ -814,124 +946,158 @@ class Node {
   hasChildNodes() {
     return this.childNodes.length > 0;
   }
-  *iterText(options) {
+  _writeText(out) {
     switch (this.nodeType) {
       case Node.DOCUMENT_NODE:
       case Node.DOCUMENT_FRAGMENT_NODE:
       case Node.ELEMENT_NODE:
         if (this.nodeName && this.nodeName.toLowerCase() === "br") {
-          yield `
-`;
+          out.push(`
+`);
           return;
         }
         for (const n of this.childNodes) {
-          for (const l of n.iterText(options)) {
-            yield l;
-          }
+          n._writeText(out);
         }
         break;
       case Node.TEXT_NODE:
-        yield this.data.replace(/&/g, "&amp;").replace(/>/g, "&gt;").replace(/</g, "&lt;");
+        out.push(escapeXML(this.data));
         break;
     }
   }
-  toText(options) {
-    return [...this.iterText(options)].join("");
+  *iterText(_options) {
+    const out = [];
+    this._writeText(out);
+    yield* out;
   }
-  toXMLLines(options) {
-    return [...this.iterXMLLines(options)];
+  toText(_options) {
+    const out = [];
+    this._writeText(out);
+    return out.join("");
   }
-  *iterXMLLines(options) {
+  _writeXML(out, options) {
     const has_comments = !(options && options.comments === false);
     const has_doctype = !(options && options.doctype === false);
     switch (this.nodeType) {
       case Node.DOCUMENT_NODE:
         if (has_doctype) {
-          yield `<?xml version='1.0' charset='utf-8' ?>
-`;
+          out.push(`<?xml version='1.0' charset='utf-8' ?>
+`);
         }
         for (const n of this.childNodes) {
-          for (const l of n.iterXMLLines(options)) {
-            yield l;
-          }
+          n._writeXML(out, options);
         }
         break;
       case Node.DOCUMENT_FRAGMENT_NODE:
         for (const n of this.childNodes) {
-          for (const l of n.iterXMLLines(options)) {
-            yield l;
-          }
+          n._writeXML(out, options);
         }
         break;
       case Node.ELEMENT_NODE:
         {
           const element = this;
-          const name = element.namespace ? `${element.namespace}:${this.nodeName}` : `${this.nodeName}`;
+          const name = element.namespace ? `${element.namespace}:${this.nodeName}` : this.nodeName;
           const empty = !options || !options.html ? undefined : HTML_NOEMPTY.has(name) ? false : HTML_EMPTY.has(name) ? true : undefined;
-          yield `<${name}`;
+          out.push(`<${name}`);
           let styleAttr = null;
           for (const [k, v] of element._attributes.entries()) {
             if (k === "style") {
               styleAttr = v;
-            } else if (v && v.value !== undefined) {
-              yield v.value === null ? ` ${k}` : ` ${k}="${v.value || ""}"`;
+            } else if (v) {
+              // `_value` read directly, like getAttribute (see above)
+              const value = v._value || "";
+              out.push(` ${k}="${value}"`);
             }
           }
-          if (styleAttr || Object.keys(element.style).length > 0) {
-            let styleValue = styleAttr ? styleAttr.value : "";
-            const inlineStyles = Object.keys(element.style).map((k) => `${toCSSPropertyName(k)}: ${element.style[k]}`).join(";");
-            if (inlineStyles) {
-              styleValue = styleValue ? `${styleValue};${inlineStyles}` : inlineStyles;
+          const styleKeys = Object.keys(element.style);
+          if (styleAttr || styleKeys.length > 0) {
+            let styleValue = styleAttr ? styleAttr._value || "" : "";
+            if (styleKeys.length > 0) {
+              // String concatenation: style objects hold a handful of keys,
+              // so an array + join per element is pure overhead
+              let inlineStyles = "";
+              for (const key of styleKeys) {
+                inlineStyles += (inlineStyles ? ";" : "") + toCSSPropertyName(key) + ": " + element.style[key];
+              }
+              if (inlineStyles) {
+                styleValue = styleValue ? `${styleValue};${inlineStyles}` : inlineStyles;
+              }
             }
             if (styleValue) {
-              yield ` style="${styleValue}"`;
+              out.push(` style="${styleValue}"`);
             }
           }
           for (const [ns, attrs] of element._attributesNS.entries()) {
             for (const [k, v] of attrs.entries()) {
-              if (v && v.value !== undefined) {
+              if (v) {
+                const value = v._value || "";
                 const prefix = ns === "http://www.w3.org/1999/xlink" ? "xlink" : ns === "http://www.w3.org/2000/svg" ? "svg" : ns === "http://www.w3.org/XML/1998/namespace" ? "xml" : null;
                 const attrName = prefix ? `${prefix}:${k}` : k;
-                yield v.value === null ? ` ${attrName}` : ` ${attrName}="${v.value}"`;
+                out.push(` ${attrName}="${value}"`);
               }
             }
           }
           if (options?.html && empty === true) {
-            yield " >";
+            out.push(" >");
           } else if (this.childNodes.length === 0 && empty !== false) {
-            yield " />";
+            out.push(" />");
           } else {
-            yield ">";
+            out.push(">");
             for (const n of this.childNodes) {
-              for (const l of n.iterXMLLines(options)) {
-                yield l;
-              }
+              n._writeXML(out, options);
             }
-            yield `</${name}>`;
+            out.push(`</${name}>`);
           }
         }
         break;
       case Node.TEXT_NODE:
-        yield this.data.replace(/&/g, "&amp;").replace(/>/g, "&gt;").replace(/</g, "&lt;");
+        out.push(escapeXML(this.data));
         break;
       case Node.COMMENT_NODE:
         if (has_comments) {
-          yield `<!--${this.data ? this.data.replace(/>/g, "&gt;") : ""}-->`;
+          out.push(`<!--${this.data ? this.data.replace(/>/g, "&gt;") : ""}-->`);
         }
         break;
     }
   }
+  toXMLLines(options) {
+    const out = [];
+    this._writeXML(out, options);
+    return out;
+  }
+  *iterXMLLines(options) {
+    const out = [];
+    this._writeXML(out, options);
+    yield* out;
+  }
   toXML(options = {}) {
-    return this.toXMLLines(options).join("");
+    const out = [];
+    this._writeXML(out, options);
+    return out.join("");
   }
   toHTML(options = {}) {
-    return this.toXMLLines({ ...options, html: true }).join("");
+    const out = [];
+    this._writeXML(out, { ...options, html: true });
+    return out.join("");
   }
   toJSON() {
     return {
       name: this.nodeName,
       children: this.childNodes.map((_) => _.toJSON())
     };
+  }
+  // Method: _collectText
+  // Appends the text content of this node's leaves to `out`, so that
+  // `textContent` joins a single array instead of one array per node.
+  _collectText(out) {
+    const children = this.childNodes;
+    if (children.length === 0) {
+      out.push(this.data);
+      return;
+    }
+    for (let i = 0;i < children.length; i++) {
+      children[i]._collectText(out);
+    }
   }
   get _index() {
     return this.parentNode ? this.parentNode.childNodes.indexOf(this) : -1;
@@ -954,6 +1120,30 @@ class Node {
   _getSiblingAt(index, offset = 0) {
     return this.parentNode?.childNodes[index + offset] || null;
   }
+  // Method: _firstMatch
+  // Returns the first descendant of this node (this node included) matching
+  // the parsed `query`, or undefined. Walks in pre-order but stops as soon as
+  // a match is found, which is what `querySelector` needs.
+  //
+  // Parameters:
+  // - query: Query - an already parsed selector (see Query.of)
+  //
+  // Returns:
+  // Node | undefined - the first matching node, if any
+  _firstMatch(query) {
+    const stack = [this];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (query.match(node)) {
+        return node;
+      }
+      const children = node.childNodes;
+      for (let i = children.length - 1;i >= 0;i--) {
+        stack.push(children[i]);
+      }
+    }
+    return undefined;
+  }
 }
 function getDataSet(target, property) {
   if (typeof property === "string") {
@@ -962,6 +1152,8 @@ function getDataSet(target, property) {
   }
   return target[property];
 }
+// Shared handler for the dataset proxy, created once (see Element.dataset)
+const DATASET_HANDLER = { get: getDataSet };
 
 class AttributeNode extends Node {
   name;
@@ -989,16 +1181,27 @@ class AttributeNode extends Node {
     return this._value || "";
   }
   set value(value) {
+    const owner = this.ownerElement;
+    // Keep the owning document's id index in sync (see Document._idIndex)
+    const isId = owner !== null && owner !== undefined && this.name === "id" && !this.namespace;
+    let previousId = null;
+    if (isId) {
+      const current = owner._attributes.get("id");
+      previousId = current !== undefined ? current._value || "" : null;
+    }
     this._value = value;
-    if (this.ownerElement) {
+    if (owner) {
       if (this.namespace) {
-        if (!this.ownerElement._attributesNS.has(this.namespace)) {
-          this.ownerElement._attributesNS.set(this.namespace, new Map);
+        if (!owner._attributesNS.has(this.namespace)) {
+          owner._attributesNS.set(this.namespace, new Map);
         }
-        this.ownerElement._attributesNS.get(this.namespace)?.set(this.name, this);
+        owner._attributesNS.get(this.namespace)?.set(this.name, this);
       } else {
-        this.ownerElement._attributes.set(this.name, this);
+        owner._attributes.set(this.name, this);
       }
+    }
+    if (isId) {
+      owner._indexId(previousId, value || "");
     }
   }
   get nodeValue() {
@@ -1016,7 +1219,8 @@ class Element extends Node {
   _attributesNS;
   classList;
   sheet;
-  dataset;
+  _dataset;
+  _document;
   constructor(name, namespace = null) {
     super(name, Node.ELEMENT_NODE);
     this.namespace = namespace;
@@ -1025,10 +1229,42 @@ class Element extends Node {
     this._attributesNS = new Map;
     this.classList = new TokenList(this, "class");
     this.sheet = name === "style" ? new StyleSheet : null;
-    this.dataset = new Proxy(this, { get: getDataSet });
+    this._dataset = undefined;
+    this._document = undefined;
+  }
+  // Property: dataset
+  // Returns a data-* attribute proxy for this element. The proxy is created
+  // lazily on first access, as most elements never expose their data-*.
+  //
+  // Returns:
+  // Proxy - a proxy reading `data-*` attributes through `getDataSet`
+  get dataset() {
+    if (this._dataset === undefined) {
+      this._dataset = new Proxy(this, DATASET_HANDLER);
+    }
+    return this._dataset;
   }
   get id() {
     return this.getAttribute("id");
+  }
+  // Function: _idKeyOf
+  // Returns the id index key for `attrNode`, normalized like the `id` getter
+  // (`value || ""`), or null when there is no attribute.
+  _idKeyOf(attrNode) {
+    return attrNode ? attrNode._value || "" : null;
+  }
+  // Function: _indexId
+  // Records an `id` change in the owning document's id index. Does nothing
+  // when the element was not created by a Document.
+  //
+  // Parameters:
+  // - previousId: string | null - the id it was indexed under, if any
+  // - currentId: string | null - the id to index it under, if any
+  _indexId(previousId, currentId) {
+    const document = this._document;
+    if (document !== undefined) {
+      document._updateIdIndex(this, previousId, currentId);
+    }
   }
   get attributes() {
     const regularAttrs = Array.from(this._attributes.values());
@@ -1041,6 +1277,9 @@ class Element extends Node {
   removeAttribute(name) {
     if (name === "style") {
       this.style = {};
+    }
+    if (name === "id") {
+      this._indexId(this._idKeyOf(this._attributes.get("id")), null);
     }
     this._attributes.delete(name);
     for (const [namespace, nsMap] of this._attributesNS.entries()) {
@@ -1056,11 +1295,15 @@ class Element extends Node {
     }
   }
   setAttribute(name, value) {
-    const attrNode = new AttributeNode(name, null, this);
+    // Reuse the existing attribute node when overwriting: an AttributeNode
+    // is a full Node and costs ~0.4 µs to allocate
+    const attrNode = this._attributes.get(name) || new AttributeNode(name, null, this);
     attrNode.value = value;
     this._attributes.set(name, attrNode);
   }
   setAttributeNode(node) {
+    const isId = node.name === "id" && !node.namespace;
+    const previousId = isId ? this._idKeyOf(this._attributes.get("id")) : null;
     node.ownerElement = this;
     if (node.namespace) {
       if (!this._attributesNS.has(node.namespace)) {
@@ -1070,17 +1313,23 @@ class Element extends Node {
     } else {
       this._attributes.set(node.name, node);
     }
+    if (isId) {
+      this._indexId(previousId, this._idKeyOf(node));
+    }
   }
   getAttributeNode(name) {
     return this._attributes.get(name) || null;
   }
   setAttributeNS(ns, name, value) {
-    if (!this._attributesNS.has(ns)) {
-      this._attributesNS.set(ns, new Map);
+    let attrs = this._attributesNS.get(ns);
+    if (attrs === undefined) {
+      attrs = new Map;
+      this._attributesNS.set(ns, attrs);
     }
-    const attrNode = new AttributeNode(name, ns, this);
+    // Reuse the existing attribute node when overwriting (see setAttribute)
+    const attrNode = attrs.get(name) || new AttributeNode(name, ns, this);
     attrNode.value = value;
-    this._attributesNS.get(ns)?.set(name, attrNode);
+    attrs.set(name, attrNode);
   }
   hasAttribute(name) {
     return this._attributes.has(name);
@@ -1089,14 +1338,16 @@ class Element extends Node {
     return this._attributesNS.get(namespace)?.has(name) || false;
   }
   getAttribute(name) {
+    // Read `_value` directly: the node came from this element's own map, so
+    // the AttributeNode.value getter would just look the same entry up again
     const attr = this._attributes.get(name);
-    return attr ? attr.value : null;
+    return attr ? attr._value || "" : null;
   }
   getAttributeNS(ns, name) {
     const nsMap = this._attributesNS.get(ns);
     if (nsMap) {
       const attr = nsMap.get(name);
-      return attr ? attr.value : null;
+      return attr ? attr._value || "" : null;
     }
     return null;
   }
@@ -1117,6 +1368,9 @@ class Element extends Node {
         }
       }
     } else {
+      if (attributeNode.name === "id") {
+        this._indexId(this._idKeyOf(this._attributes.get("id")), null);
+      }
       this._attributes.delete(attributeNode.name);
     }
     attributeNode.ownerElement = null;
@@ -1127,6 +1381,8 @@ class Element extends Node {
       throw new Error("InUseAttributeError: The attribute node is already in use by another element");
     }
     const existingNode = attributeNode.namespace ? this.getAttributeNodeNS(attributeNode.namespace, attributeNode.name) : this.getAttributeNode(attributeNode.name);
+    const isId = attributeNode.name === "id" && !attributeNode.namespace;
+    const previousId = isId ? this._idKeyOf(this._attributes.get("id")) : null;
     attributeNode.ownerElement = this;
     if (attributeNode.namespace) {
       if (!this._attributesNS.has(attributeNode.namespace)) {
@@ -1135,6 +1391,9 @@ class Element extends Node {
       this._attributesNS.get(attributeNode.namespace)?.set(attributeNode.name, attributeNode);
     } else {
       this._attributes.set(attributeNode.name, attributeNode);
+    }
+    if (isId) {
+      this._indexId(previousId, this._idKeyOf(attributeNode));
     }
     return existingNode;
   }
@@ -1157,6 +1416,12 @@ class Element extends Node {
         }
       }
       res._attributesNS.set(ns, clonedNsMap);
+    }
+    // Copy the inline style object and stylesheet rules: they live outside
+    // the attribute map, so the generic clone above would drop them
+    res.style = { ...this.style };
+    if (this.sheet && res.sheet) {
+      res.sheet.cssRules = [...this.sheet.cssRules];
     }
     return res;
   }
@@ -1307,11 +1572,11 @@ class DocumentFragment extends Node {
 
 class Document extends Node {
   body;
-  _elements;
+  _idIndex;
   constructor(nodes) {
     super("#document", Node.DOCUMENT_NODE);
     this.body = new Element("body");
-    this._elements = [];
+    this._idIndex = new Map;
     if (nodes) {
       for (const node of nodes) {
         if (node)
@@ -1320,10 +1585,12 @@ class Document extends Node {
     }
   }
   getElementById(id) {
-    for (const n of this._elements) {
-      if (n && n.id === id) {
-        return n;
-      }
+    const elements = this._idIndex.get(id);
+    if (elements === undefined) {
+      return null;
+    }
+    for (const element of elements) {
+      return element;
     }
     return null;
   }
@@ -1336,6 +1603,26 @@ class Document extends Node {
       return this.body.querySelectorAll(query);
     }
     return results;
+  }
+  // Method: querySelector
+  // Overrides Node.querySelector to apply the same `document.body` fallback
+  // as querySelectorAll: when the document's child node list has no match,
+  // the body tree is searched too (see querySelectorAll).
+  //
+  // Parameters:
+  // - query: string - the selector to look for
+  //
+  // Returns:
+  // Node | undefined - the first matching node, if any
+  querySelector(query) {
+    const result = super.querySelector(query);
+    if (result !== undefined) {
+      return result;
+    }
+    if (this.body && !this.childNodes.includes(this.body)) {
+      return this.body.querySelector(query);
+    }
+    return undefined;
   }
   createTreeWalker(node, nodeFilter) {
     return new TreeWalker(node, nodeFilter);
@@ -1368,8 +1655,38 @@ class Document extends Node {
     return this._register(new Element(name, namespace));
   }
   _register(element) {
-    this._elements.push(element);
+    element._document = this;
     return element;
+  }
+  // Method: _updateIdIndex
+  // Moves `element` from `previousId` to `currentId` in the id index. A null
+  // id means "no entry" on that side. Called by `Element._indexId`.
+  //
+  // Parameters:
+  // - element: Element - the element whose id changed
+  // - previousId: string | null - the id it was indexed under, if any
+  // - currentId: string | null - the id to index it under, if any
+  _updateIdIndex(element, previousId, currentId) {
+    if (previousId === currentId) {
+      return;
+    }
+    if (previousId !== null) {
+      const previous = this._idIndex.get(previousId);
+      if (previous !== undefined) {
+        previous.delete(element);
+        if (previous.size === 0) {
+          this._idIndex.delete(previousId);
+        }
+      }
+    }
+    if (currentId !== null) {
+      let current = this._idIndex.get(currentId);
+      if (current === undefined) {
+        current = new Set;
+        this._idIndex.set(currentId, current);
+      }
+      current.add(element);
+    }
   }
   _create() {
     return new Document;
@@ -1396,29 +1713,74 @@ class TreeWalker {
   currentNode;
   nodeFilter;
   predicate;
+  _stack;
+  _position;
   constructor(root, nodeFilter, predicate) {
     this.root = root;
     this.currentNode = root;
     this.nodeFilter = nodeFilter;
     this.predicate = predicate;
+    // Descent stack of [parent, nextChildIndex] pairs: the pre-order
+    // successor is then an O(1) amortized lookup instead of an O(n)
+    // nextSibling indexOf scan per step
+    this._stack = [];
+    this._position = root;
   }
-  _nextNode(node) {
-    if (!node) {
-      return null;
-    } else if (node.childNodes && node.childNodes.length > 0) {
-      return node.childNodes[0] ?? null;
-    } else if (node.nextSibling) {
-      return node.nextSibling;
-    } else {
-      let n = this.currentNode.parentNode;
-      while (n?.parentNode) {
-        n = n.parentNode;
-        if (n.nextSibling) {
-          return n.nextSibling;
-        }
-      }
-      return null;
+  // Method: _syncStack
+  // Rebuilds the descent stack after `currentNode` was assigned externally.
+  // Collects the ancestor chain of `currentNode` (one indexOf per level) and
+  // pushes, for each ancestor, the index of the next child to visit once the
+  // current node's subtree is done.
+  _syncStack() {
+    const stack = [];
+    const chain = [];
+    let node = this.currentNode;
+    while (node?.parentNode) {
+      chain.push(node);
+      node = node.parentNode;
     }
+    for (let i = chain.length - 1;i >= 0;i--) {
+      const child = chain[i];
+      const parent = child.parentNode;
+      const index = parent.childNodes.indexOf(child);
+      if (index < 0) {
+        break;
+      }
+      stack.push([parent, index + 1]);
+    }
+    this._stack = stack;
+    this._position = this.currentNode;
+  }
+  // Method: _advance
+  // Returns the pre-order successor of `node` given the current stack, or
+  // null when the walk is exhausted. Descends into `node`'s first child when
+  // it has one, otherwise resumes at the nearest ancestor's pending child.
+  //
+  // Parameters:
+  // - node: Node | null - the node whose successor is requested
+  //
+  // Returns:
+  // Node | null - the next node in document order
+  _advance(node) {
+    if (node) {
+      const children = node.childNodes;
+      if (children.length > 0) {
+        this._stack.push([node, 1]);
+        return children[0];
+      }
+    }
+    const stack = this._stack;
+    while (stack.length > 0) {
+      const entry = stack[stack.length - 1];
+      const parent = entry[0];
+      const index = entry[1];
+      if (index < parent.childNodes.length) {
+        entry[1] = index + 1;
+        return parent.childNodes[index];
+      }
+      stack.pop();
+    }
+    return null;
   }
   _acceptNode(node) {
     switch (node.nodeType) {
@@ -1445,11 +1807,16 @@ class TreeWalker {
     }
   }
   nextNode() {
-    let next = this._nextNode(this.currentNode);
-    while (next && !this._acceptNode(next)) {
-      next = this._nextNode(next);
+    if (this.currentNode !== this._position) {
+      // currentNode was assigned externally: rebuild the descent stack
+      this._syncStack();
+    }
+    let next = this._advance(this.currentNode);
+    while (next !== null && !this._acceptNode(next)) {
+      next = this._advance(next);
     }
     this.currentNode = next;
+    this._position = next;
     return next;
   }
 }
@@ -1504,17 +1871,24 @@ class StyleSheet {
     return this;
   }
 }
+// Parsed camelCase to kebab-case conversions, keyed by property name. Style
+// serialization converts the same handful of keys for every styled element,
+// so a bounded cache (cleared when full) makes the conversion ~free.
+const CSS_NAME_CACHE = new Map;
+const CSS_NAME_CACHE_MAX = 512;
 const toCSSPropertyName = (name) => {
-  const property = /[A-Za-z][a-z]*/g;
-  const res = [];
-  let match;
-  do {
-    match = property.exec(name);
-    if (match !== null) {
-      res.push(match[0].toLowerCase());
+  let kebab = CSS_NAME_CACHE.get(name);
+  if (kebab === undefined) {
+    if (CSS_NAME_CACHE.size >= CSS_NAME_CACHE_MAX) {
+      CSS_NAME_CACHE.clear();
     }
-  } while (match !== null);
-  return res.join("-");
+    kebab = name.replace(/[A-Z]/g, "-$&").toLowerCase();
+    if (kebab[0] === "-") {
+      kebab = kebab.slice(1);
+    }
+    CSS_NAME_CACHE.set(name, kebab);
+  }
+  return kebab;
 };
 const NodeList = Array;
 const StyleSheetList = Array;
